@@ -47,6 +47,21 @@ function Toggle({ checked, onChange }) {
     );
 }
 
+// ─── Shared Components ────────────────────────────────────────────────────────
+const MetricCard = ({ label, value, color }) => (
+    <div style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 8, padding: '10px 8px', textAlign: 'center' }}>
+        <div style={{ fontSize: '.68rem', color: '#8b949e', marginBottom: 4 }}>{label}</div>
+        <div style={{ fontSize: '1.05rem', fontWeight: 700, fontFamily: 'monospace', color }}>{value}</div>
+    </div>
+);
+
+const Field = ({ label, children }) => (
+    <div style={{ marginBottom: 10 }}>
+        <label style={{ fontSize: '.75rem', color: '#8b949e', marginBottom: 3, display: 'block' }}>{label}</label>
+        {children}
+    </div>
+);
+
 // ─── Main Page ───────────────────────────────────────────────────────────────
 export default function HomePage() {
     const [selectedTicker, setSelectedTicker] = useState('TQQQ');
@@ -215,21 +230,7 @@ export default function HomePage() {
         return <span style={{ background: cfg[0], color: cfg[1], padding: '1px 8px', borderRadius: 10, fontSize: '.7rem', fontWeight: 600, whiteSpace: 'nowrap' }}>{c}</span>;
     };
 
-    // ── compact metric card ────
-    const MetricCard = ({ label, value, color }) => (
-        <div style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 8, padding: '10px 8px', textAlign: 'center' }}>
-            <div style={{ fontSize: '.68rem', color: '#8b949e', marginBottom: 4 }}>{label}</div>
-            <div style={{ fontSize: '1.05rem', fontWeight: 700, fontFamily: 'monospace', color }}>{value}</div>
-        </div>
-    );
 
-    // ── inline label + field group ────
-    const Field = ({ label, children }) => (
-        <div style={{ marginBottom: 10 }}>
-            <label style={{ fontSize: '.75rem', color: '#8b949e', marginBottom: 3, display: 'block' }}>{label}</label>
-            {children}
-        </div>
-    );
 
     const inputStyle = {
         background: '#21262d', border: '1px solid #30363d', borderRadius: 6,
