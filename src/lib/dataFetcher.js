@@ -115,13 +115,13 @@ export async function fetchPrices(tickers, startDate, endDate, warmupDays = 400)
  * 백테스트용 데이터 배열 준비
  * @returns {Promise<Array<{date, [ticker], SGOV, SPYM, ma200, leverATH, leverDD, leverOpen, leverLow}>>}
  */
-export async function prepareBacktestData(leverTicker, startDate, endDate) {
+export async function prepareBacktestData(leverTicker, startDate, endDate, maPeriod = 200) {
     // 상장일 하한 적용
     const earliest = TICKER_EARLIEST_DATE[leverTicker];
     const adjStart = earliest && earliest > startDate ? earliest : startDate;
 
     const allTickers = [...new Set([leverTicker, SAFE_ASSET, PROFIT_ASSET, ...BENCHMARK_TICKERS])];
-    const pricesByDate = await fetchPrices(allTickers, adjStart, endDate, 400);
+    const pricesByDate = await fetchPrices(allTickers, adjStart, endDate, maPeriod * 2);
 
     // 날짜 정렬
     const allDates = Array.from(pricesByDate.keys()).sort();
@@ -136,8 +136,8 @@ export async function prepareBacktestData(leverTicker, startDate, endDate) {
         if (leverPrice == null) continue;
 
         closePrices.push(leverPrice);
-        const ma200 = closePrices.length >= 200
-            ? closePrices.slice(-200).reduce((a, b) => a + b, 0) / 200
+        const ma200 = closePrices.length >= maPeriod
+            ? closePrices.slice(-maPeriod).reduce((a, b) => a + b, 0) / maPeriod
             : 0;
 
         // ATH 및 Drawdown

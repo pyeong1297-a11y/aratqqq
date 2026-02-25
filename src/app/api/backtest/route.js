@@ -10,7 +10,8 @@ export async function POST(req) {
         const initialCapital = parseFloat(body.initial_capital ?? 10000);
         const monthlyContribution = parseFloat(body.monthly_contribution ?? 0);
         const startDate = body.start_date || '2016-01-01';
-        const endDate = body.end_date || '2026-01-01';
+        const endDate = body.end_date || new Date().toISOString().split('T')[0];
+        const maPeriod = parseInt(body.ma_period ?? 200, 10);
         const profitTaking = body.profit_taking !== false;
         const profitStart = parseFloat(body.profit_start ?? 100);
         const profitRatio = parseFloat(body.profit_ratio ?? 50) / 100;
@@ -20,7 +21,7 @@ export async function POST(req) {
         const confirmCross = body.confirm_cross !== false;
 
         // 데이터 준비
-        const data = await prepareBacktestData(leverTicker, startDate, endDate);
+        const data = await prepareBacktestData(leverTicker, startDate, endDate, maPeriod);
         if (!data || data.length === 0) {
             return NextResponse.json({ error: '데이터 없음. 기간 또는 티커를 확인하세요.' }, { status: 400 });
         }
@@ -96,6 +97,8 @@ export async function POST(req) {
             };
         });
 
+        const lastCondition = portfolioValues.length > 0 ? portfolioValues[portfolioValues.length - 1].condition : '알 수 없음';
+
         return NextResponse.json({
             lever_ticker: leverTicker,
             result: {
@@ -105,6 +108,7 @@ export async function POST(req) {
                 cagr: Math.round(cagr * 100) / 100,
                 mdd: Math.round(mdd * 100) / 100,
                 trades_count: tradesList.length,
+                current_condition: lastCondition,
             },
             benchmarks: Object.fromEntries(
                 Object.entries(benchmarks).map(([t, bm]) => [t, {
@@ -116,6 +120,7 @@ export async function POST(req) {
             trades: tradesList,
             data_period: `${data[0].dateStr} ~ ${data[data.length - 1].dateStr}`,
             trading_days: data.length,
+            ma_period: maPeriod,
         });
 
     } catch (e) {

@@ -53,9 +53,10 @@ export default function HomePage() {
     const [customTicker, setCustomTicker] = useState('');
     const [form, setForm] = useState({
         start_date: '2016-01-01',
-        end_date: '2026-01-01',
+        end_date: new Date().toISOString().split('T')[0],
         initial_capital: 10000,
         monthly_contribution: 0,
+        ma_period: 200,
         confirm_cross: true,
         stoploss_pct: 5,
         profit_taking: true,
@@ -181,7 +182,7 @@ export default function HomePage() {
                 labels,
                 datasets: [
                     { label: `${data.lever_ticker} 가격`, data: chart_data.leverPrices, borderColor: '#58a6ff', borderWidth: 1.4, pointRadius: 0, tension: 0.1 },
-                    { label: 'MA200', data: chart_data.ma200.map(v => v > 0 ? v : null), borderColor: '#ff9500', borderWidth: 1.8, borderDash: [4, 3], pointRadius: 0, tension: 0.1 },
+                    { label: `MA${result.ma_period}`, data: chart_data.ma200.map(v => v > 0 ? v : null), borderColor: '#ff9500', borderWidth: 1.8, borderDash: [4, 3], pointRadius: 0, tension: 0.1 },
                     eventsDataset,
                 ],
             },
@@ -401,9 +402,10 @@ export default function HomePage() {
                         <div className="card-title">⚙️ 기본 설정</div>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
                             <Field label="시작일"><input value={form.start_date} onChange={e => setField('start_date', e.target.value)} placeholder="YYYY-MM-DD" style={inputStyle} /></Field>
-                            <Field label="종료일"><input value={form.end_date} onChange={e => setField('end_date', e.target.value)} placeholder="YYYY-MM-DD" style={inputStyle} /></Field>
+                            <Field label="종료일"><input value={form.end_date} onChange={e => setField('end_date', e.target.value)} placeholder="오늘 날짜" style={inputStyle} /></Field>
                             <Field label="초기 투자금 ($)"><input type="number" value={form.initial_capital} onChange={e => setField('initial_capital', +e.target.value)} min={100} step={1000} style={inputStyle} /></Field>
                             <Field label="월 적립금 ($)"><input type="number" value={form.monthly_contribution} onChange={e => setField('monthly_contribution', +e.target.value)} min={0} step={100} style={inputStyle} /></Field>
+                            <Field label="이동평균선 (일)"><input type="number" value={form.ma_period} onChange={e => setField('ma_period', +e.target.value)} min={10} max={1000} step={10} style={inputStyle} /></Field>
                         </div>
                         <hr style={{ border: 'none', borderTop: '1px solid #30363d', margin: '8px 0' }} />
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -472,6 +474,19 @@ export default function HomePage() {
                     {/* 성과 지표 */}
                     {result && (
                         <>
+                            <div style={{
+                                background: result.result.current_condition === '집중투자' ? 'rgba(77,255,136,.08)' : result.result.current_condition === '과열' ? 'rgba(255,215,0,.08)' : 'rgba(255,107,107,.08)',
+                                border: `1px solid ${result.result.current_condition === '집중투자' ? 'rgba(77,255,136,.3)' : result.result.current_condition === '과열' ? 'rgba(255,215,0,.3)' : 'rgba(255,107,107,.3)'}`,
+                                borderRadius: 8, padding: '14px 18px', marginBottom: 15
+                            }}>
+                                <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#e6edf3', display: 'flex', alignItems: 'center', gap: 10 }}>
+                                    📢 현재 시장은 {condTag(result.result.current_condition)} 구간입니다!
+                                </div>
+                                <div style={{ fontSize: '.8rem', color: '#8b949e', marginTop: 8 }}>
+                                    ※ 최종 거래일({result.data_period?.split(' ~ ')[1] || form.end_date}) 기준 <b>{result.ma_period}일선</b> 분석 결과
+                                </div>
+                            </div>
+
                             <div className="metrics-grid">
                                 <MetricCard label="최종 자산" value={`$${fmt(result.result.final_value, 0)}`} color="#00d4aa" />
                                 <MetricCard label="총 수익률" value={`${fmt(result.result.total_return, 1)}%`} color={result.result.total_return >= 0 ? '#4dff88' : '#ff6b6b'} />
