@@ -62,6 +62,7 @@ export default function HomePage() {
         profit_start: 100,
         profit_ratio: 50,
         profit_spacing: 100,
+        profit_full_exit: false,
     });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
@@ -434,8 +435,21 @@ export default function HomePage() {
                                 <Field label="익절 시 매도 (%)">
                                     <input type="number" value={form.profit_ratio} onChange={e => setField('profit_ratio', +e.target.value)} min={10} max={100} step={5} style={inputStyle} />
                                 </Field>
+                                <hr style={{ border: 'none', borderTop: '1px solid #30363d', margin: '8px 0' }} />
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                                    <span style={{ fontSize: '.8rem' }}>
+                                        🎯 {form.profit_start + form.profit_spacing}%에서 전량 익절
+                                    </span>
+                                    <Toggle checked={form.profit_full_exit} onChange={v => setField('profit_full_exit', v)} />
+                                </div>
+                                {form.profit_full_exit && (
+                                    <div style={{ background: 'rgba(255,215,0,.07)', border: '1px solid rgba(255,215,0,.25)', borderRadius: 6, padding: '6px 10px', fontSize: '.72rem', color: '#ffd700', lineHeight: 1.5 }}>
+                                        <b>{form.profit_start}%</b> 익절 후 남은 물량을 <b>{form.profit_start + form.profit_spacing}%</b>에서 전량 매도합니다. 3배 이상 익절 없이 완전 청산.
+                                    </div>
+                                )}
                             </>
                         )}
+
                     </div>
 
                     {/* 실행 버튼 */}

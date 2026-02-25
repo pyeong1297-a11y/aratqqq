@@ -15,6 +15,7 @@ export async function POST(req) {
         const profitStart = parseFloat(body.profit_start ?? 100);
         const profitRatio = parseFloat(body.profit_ratio ?? 50) / 100;
         const profitSpacing = parseFloat(body.profit_spacing ?? 100);
+        const profitFullExit = body.profit_full_exit === true;
         const stoplostPct = parseFloat(body.stoploss_pct ?? 5) / 100;
         const confirmCross = body.confirm_cross !== false;
 
@@ -27,7 +28,7 @@ export async function POST(req) {
         // 백테스트 실행
         const bt = new Backtester({
             data, leverTicker, initialCapital, monthlyContribution,
-            profitTaking, profitStart, profitRatio, profitSpacing,
+            profitTaking, profitStart, profitRatio, profitSpacing, profitFullExit,
             stoplostPct, confirmCross,
         });
         const result = bt.run();
@@ -67,7 +68,13 @@ export async function POST(req) {
         const tradesList = trades.map(t => {
             let label = null;
             const action = t.action || '';
-            if (action.includes('익절')) {
+            if (action.includes('전량익절')) {
+                try {
+                    const pctStr = action.split('+')[1].split('%')[0];
+                    const multiple = Math.floor(parseFloat(pctStr) / 100);
+                    label = `${multiple}배🎯`;
+                } catch { label = '전량'; }
+            } else if (action.includes('익절')) {
                 try {
                     const pctStr = action.split('+')[1].split('%')[0];
                     const multiple = Math.floor(parseFloat(pctStr) / 100);
