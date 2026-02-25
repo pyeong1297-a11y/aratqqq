@@ -13,6 +13,8 @@ export const TICKER_EARLIEST_DATE = {
     SOLT: '2024-02-22',
     ETHU: '2022-10-04',
     BULZ: '2021-08-18',
+    'BTC-USD': '2014-09-17',
+    'ETH-USD': '2017-11-09',
 };
 
 export const TICKER_DESCRIPTIONS = {
@@ -134,6 +136,11 @@ export async function prepareBacktestData(leverTicker, startDate, endDate, maPer
         const entry = pricesByDate.get(dateStr);
         const leverPrice = entry[leverTicker];
         if (leverPrice == null) continue;
+
+        // 주말 코인장 필터링 (주식 시장 개장일 기준 SPYM/SGOV가 있을 때만 혹은 오늘일때만)
+        // 코인은 365일 열리지만, 이 전략은 주식 ETF 교환 전략이므로 주식 개장일 기준으로 맞춥니다.
+        const isStockMarketOpen = entry[PROFIT_ASSET] || entry[SAFE_ASSET] || entry['BIL'] || entry['QQQ'];
+        if (!isStockMarketOpen && dateStr < endDate) continue;
 
         closePrices.push(leverPrice);
         const ma200 = closePrices.length >= maPeriod
