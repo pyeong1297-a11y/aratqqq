@@ -1,6 +1,6 @@
 /**
  * 백테스트 엔진 — ARA Backtester
- * backtester.py → JS 포팅
+ * backtester.py → JS 포팅 (딥바잉 전략 제거)
  */
 
 import { MarketCondition, determineMarketCondition, checkStoploss } from './strategy.js';
@@ -84,16 +84,6 @@ class Portfolio {
         return proceeds;
     }
 
-    sellSgovAmount(price, amount) {
-        if (amount <= 0 || price <= 0 || this.sgovShares <= 0) return 0;
-        const sharesToSell = Math.min(this.sgovShares, amount / price);
-        const proceeds = this._sellProceeds(sharesToSell, price);
-        this.sgovShares -= sharesToSell;
-        if (this.sgovShares <= 0.0001) { this.sgovShares = 0; this.sgovAvgPrice = 0; }
-        this.cash += proceeds;
-        return proceeds;
-    }
-
     totalValue(leverPrice, spymPrice, sgovPrice) {
         return this.cash
             + this.leverShares * leverPrice
@@ -128,9 +118,6 @@ export class Backtester {
         profitRatio = 0.5,
         profitSpacing = 100,
         stoplostPct = 0.05,
-        dipBuyEnabled = false,
-        dipBuyThresholds = [-50, -60, -70],
-        dipBuyAllocations = [0.33, 0.33, 0.34],
         confirmCross = true,
         sellSpymOnInvest = false,
     }) {
@@ -143,9 +130,6 @@ export class Backtester {
         this.profitRatio = profitRatio;
         this.profitSpacing = profitSpacing > 0 ? profitSpacing : 100;
         this.stoplostPct = stoplostPct;
-        this.dipBuyEnabled = dipBuyEnabled;
-        this.dipBuyThresholds = [...dipBuyThresholds].sort((a, b) => a - b);
-        this.dipBuyAllocations = dipBuyAllocations;
         this.confirmCross = confirmCross;
         this.sellSpymOnInvest = sellSpymOnInvest;
     }
@@ -160,14 +144,6 @@ export class Backtester {
         let sgovBuyCost = 0;
         let sgovBuyDate = null;
         let gapEntrySlRef = 0;
-
-        const triggeredDips = {};
-        if (this.dipBuyEnabled) {
-            for (const t of this.dipBuyThresholds) triggeredDips[t] = false;
-        }
-        let dipBuyBaseSgov = 0;
-        let dipHoldShares = 0;
-        let dipHoldCost = 0;
 
         const portfolioValues = [];
         const trades = [];
@@ -247,7 +223,6 @@ export class Backtester {
                 p.buySgov(sgovPrice, p.cash);
                 sgovBuyCost = p.sgovShares * sgovPrice;
                 sgovBuyDate = date;
-                dipBuyBaseSgov = sgovBuyCost;
                 gapEntrySlRef = 0;
                 waitingForConfirm = false;
                 tradeAction = `🛑 스탑로스(-${(this.stoplostPct * 100).toFixed(0)}%): 전량매도 → SGOV $${buyAmount.toFixed(0)}${gainInfo}${spymInfo}`;
@@ -260,52 +235,22 @@ export class Backtester {
                 if (p.leverShares > 0 || p.spymShares > 0) {
                     const gainInfo = this._leverInfo(p, lt, leverPrice);
                     const spymInfo = this._spymInfo(p, spymPrice);
-                    const procL = p.sellLever(leverPrice);
+                    p.sellLever(leverPrice);
                     const procS = p.sellSpym(spymPrice);
-                    const totalP = procL + procS;
                     p.buySgov(sgovPrice, p.cash);
                     sgovBuyCost = p.sgovShares * sgovPrice;
                     sgovBuyDate = date;
-                    dipBuyBaseSgov = sgovBuyCost;
                     gapEntrySlRef = 0;
-                    const dipMsg = dipHoldShares > 0 ? ` | 딥바잉 ${dipHoldShares.toFixed(1)}주 장기보유중` : '';
-                    tradeAction = `📉 하락신호: 전량매도 → SGOV $${totalP.toFixed(0)}${gainInfo}${spymInfo}${dipMsg}`;
+                    tradeAction = `📉 하락신호: 전량매도 → SGOV $${(p.sgovShares * sgovPrice).toFixed(0)}${gainInfo}${spymInfo}`;
                 } else if (p.cash > 0) {
                     p.buySgov(sgovPrice, p.cash);
                     if (i === 0) {
                         sgovBuyCost = p.sgovShares * sgovPrice;
                         sgovBuyDate = date;
-                        dipBuyBaseSgov = sgovBuyCost;
                         tradeAction = `초기투자: SGOV $${(p.sgovShares * sgovPrice).toFixed(0)}`;
                     } else if (monthlyToday) {
                         sgovBuyCost += this.monthlyContribution;
                         tradeAction = `[월적립] $${this.monthlyContribution.toFixed(0)} → SGOV`;
-                    }
-                }
-
-                // 딥 바잉 체크
-                if (this.dipBuyEnabled && p.sgovShares > 0) {
-                    const dd = row.leverDD || 0;
-                    if (dipBuyBaseSgov <= 0) dipBuyBaseSgov = p.sgovShares * sgovPrice;
-                    for (let idx = 0; idx < this.dipBuyThresholds.length; idx++) {
-                        const thr = this.dipBuyThresholds[idx];
-                        const alloc = this.dipBuyAllocations[idx] ?? this.dipBuyAllocations[this.dipBuyAllocations.length - 1];
-                        if (dd <= thr && !triggeredDips[thr]) {
-                            const sgovVal = p.sgovShares * sgovPrice;
-                            const buyAmt = Math.min(dipBuyBaseSgov * alloc, sgovVal);
-                            if (buyAmt > 10) {
-                                const sharesBefore = p.sgovShares;
-                                p.sellSgovAmount(sgovPrice, buyAmt);
-                                if (sharesBefore > 0) sgovBuyCost *= (p.sgovShares / sharesBefore);
-                                const newSh = p.cash * (1 - FEE_RATE) / leverPrice;
-                                dipHoldShares += newSh;
-                                dipHoldCost += p.cash;
-                                p.cash = 0;
-                                triggeredDips[thr] = true;
-                                const dipMsg2 = `딥바잉(${thr}%, ${(alloc * 100).toFixed(0)}%): SGOV $${buyAmt.toFixed(0)} → ${lt} ${newSh.toFixed(1)}주 장기보유`;
-                                tradeAction = tradeAction ? `${tradeAction} + ${dipMsg2}` : dipMsg2;
-                            }
-                        }
                     }
                 }
             }
@@ -314,33 +259,9 @@ export class Backtester {
             // C) 집중투자 (INVEST)
             // ─────────────────────────────────────────────────────────────────────
             else if (condition === MarketCondition.INVEST) {
-                if (this.dipBuyEnabled && (row.leverDD || 0) > -20) {
-                    for (const t of this.dipBuyThresholds) triggeredDips[t] = false;
-                    dipBuyBaseSgov = 0;
-                }
-
-                if (dipHoldShares > 0) {
-                    const dipAvg = dipHoldCost / dipHoldShares;
-                    const dipPct = (leverPrice / dipAvg - 1) * 100;
-                    if (p.leverShares > 0) {
-                        const tot = p.leverAvgPrice * p.leverShares + dipHoldCost;
-                        const totSh = p.leverShares + dipHoldShares;
-                        p.leverAvgPrice = tot / totSh;
-                        p.leverShares = totSh;
-                    } else {
-                        p.leverShares = dipHoldShares;
-                        p.leverAvgPrice = dipAvg;
-                    }
-                    const merge = ` [딥바잉 ${dipHoldShares.toFixed(1)}주 합류 | 평단$${dipAvg.toFixed(2)}, ${dipPct >= 0 ? '+' : ''}${dipPct.toFixed(1)}%]`;
-                    dipHoldShares = 0; dipHoldCost = 0; p.lastMilestone = 0;
-                    tradeAction = `딥바잉 200일선 복귀 → 일반전략 합류${merge}`;
-                }
-
                 // 배수 익절
                 const profitResult = this._checkProfitTaking(p, leverPrice, spymPrice);
-                if (profitResult) {
-                    tradeAction = tradeAction ? `${tradeAction} + ${profitResult}` : profitResult;
-                }
+                if (profitResult) tradeAction = profitResult;
 
                 // SGOV → 레버리지 ETF 전환
                 if (p.sgovShares > 0) {
@@ -349,28 +270,14 @@ export class Backtester {
                         tradeAction = tradeAction || `⏳ 200일선 가짜돌파 확인중 (1일 대기)`;
                     } else {
                         p.sellSgov(sgovPrice);
-                        let spymReinvestInfo = '';
-                        if (this.sellSpymOnInvest && p.spymShares > 0) {
-                            const spymVal = p.spymShares * spymPrice;
-                            p.sellSpym(spymPrice);
-                            spymReinvestInfo = ` [SPYM $${spymVal.toFixed(0)} 재투자]`;
-                        }
                         p.buyLever(leverPrice, p.cash);
                         sgovBuyCost = 0; sgovBuyDate = null;
-                        tradeAction = `📈 집중투자: SGOV → ${lt} $${(p.leverShares * leverPrice).toFixed(0)} (체결가$${leverPrice.toFixed(2)})${sgovInfo}${spymReinvestInfo}`;
+                        tradeAction = `📈 집중투자: SGOV → ${lt} $${(p.leverShares * leverPrice).toFixed(0)} (체결가$${leverPrice.toFixed(2)})${sgovInfo}`;
                     }
-                } else if (p.leverShares > 0 && !waitingForConfirm) {
-                    if (this.sellSpymOnInvest && p.spymShares > 0) {
-                        const spymVal = p.spymShares * spymPrice;
-                        p.sellSpym(spymPrice);
-                        p.buyLever(leverPrice, p.cash);
-                        const msg = `SPYM $${spymVal.toFixed(0)} → ${lt} 재투자 (체결가$${leverPrice.toFixed(2)})`;
-                        tradeAction = tradeAction ? `${tradeAction} + ${msg}` : msg;
-                    } else if (p.cash > 0) {
-                        p.buyLever(leverPrice, p.cash);
-                        if (monthlyToday) {
-                            tradeAction = `[월적립] $${this.monthlyContribution.toFixed(0)} → ${lt} (체결가$${leverPrice.toFixed(2)} | 현재평단$${p.leverAvgPrice.toFixed(2)})`;
-                        }
+                } else if (p.cash > 0 && !waitingForConfirm) {
+                    p.buyLever(leverPrice, p.cash);
+                    if (monthlyToday) {
+                        tradeAction = `[월적립] $${this.monthlyContribution.toFixed(0)} → ${lt} (체결가$${leverPrice.toFixed(2)})`;
                     }
                 }
             }
@@ -394,15 +301,13 @@ export class Backtester {
                     } else if (p.cash > 0) {
                         p.buySpym(spymPrice, p.cash);
                         if (monthlyToday) {
-                            tradeAction = `[월적립] $${this.monthlyContribution.toFixed(0)} → SPYM(과열구간, 체결가$${spymPrice.toFixed(2)})`;
+                            tradeAction = `[월적립] $${this.monthlyContribution.toFixed(0)} → SPYM(과열)`;
                         }
                     }
                 } else if (p.cash > 0) {
                     p.buySpym(spymPrice, p.cash);
                     if (monthlyToday) {
-                        tradeAction = tradeAction
-                            ? `${tradeAction} + [월적립] SPYM`
-                            : `[월적립] $${this.monthlyContribution.toFixed(0)} → SPYM(과열구간)`;
+                        tradeAction = tradeAction ? `${tradeAction} + [월적립] SPYM` : `[월적립] $${this.monthlyContribution.toFixed(0)} → SPYM(과열)`;
                     } else if (i === 0) {
                         tradeAction = `초기투자(과열): SPYM $${(p.spymShares * spymPrice).toFixed(0)}`;
                     }
@@ -410,13 +315,12 @@ export class Backtester {
             }
 
             // ── 포트폴리오 가치 기록 ───────────────────────────────────────────────
-            const dipValue = dipHoldShares * leverPrice;
-            const tv = p.totalValue(leverPrice, spymPrice, sgovPrice) + dipValue;
+            const tv = p.totalValue(leverPrice, spymPrice, sgovPrice);
 
             portfolioValues.push({
                 date, dateStr,
                 totalValue: tv,
-                leverValue: p.leverShares * leverPrice + dipValue,
+                leverValue: p.leverShares * leverPrice,
                 spymValue: p.spymShares * spymPrice,
                 sgovValue: p.sgovShares * sgovPrice,
                 cash: p.cash,

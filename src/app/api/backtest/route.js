@@ -16,14 +16,7 @@ export async function POST(req) {
         const profitRatio = parseFloat(body.profit_ratio ?? 50) / 100;
         const profitSpacing = parseFloat(body.profit_spacing ?? 100);
         const stoplostPct = parseFloat(body.stoploss_pct ?? 5) / 100;
-        const dipBuyEnabled = !!body.dip_buy_enabled;
         const confirmCross = body.confirm_cross !== false;
-
-        // 딥바잉 파라미터 파싱
-        const thrStr = body.dip_buy_thresholds || '-50,-60,-70';
-        const allocStr = body.dip_buy_allocations || '33,33,34';
-        const dipBuyThresholds = thrStr.split(',').map(x => parseFloat(x.trim())).filter(x => !isNaN(x));
-        const dipBuyAllocations = allocStr.split(',').map(x => parseFloat(x.trim()) / 100).filter(x => !isNaN(x));
 
         // 데이터 준비
         const data = await prepareBacktestData(leverTicker, startDate, endDate);
@@ -35,7 +28,7 @@ export async function POST(req) {
         const bt = new Backtester({
             data, leverTicker, initialCapital, monthlyContribution,
             profitTaking, profitStart, profitRatio, profitSpacing,
-            stoplostPct, dipBuyEnabled, dipBuyThresholds, dipBuyAllocations, confirmCross,
+            stoplostPct, confirmCross,
         });
         const result = bt.run();
         if (!result) return NextResponse.json({ error: '백테스트 실패' }, { status: 500 });
@@ -72,7 +65,6 @@ export async function POST(req) {
 
         // 거래내역 직렬화 (레이블 간소화)
         const tradesList = trades.map(t => {
-            // 익절 라벨 파싱 → 배수
             let label = null;
             const action = t.action || '';
             if (action.includes('익절')) {
@@ -93,7 +85,6 @@ export async function POST(req) {
                 total_value: Math.round(t.totalValue * 100) / 100,
                 gain: Math.round(t.gain * 100) / 100,
                 gain_pct: Math.round(t.gainPct * 100) / 100,
-                portfolio_status: t.portfolioStatus,
                 chart_label: label,
             };
         });
@@ -122,6 +113,6 @@ export async function POST(req) {
 
     } catch (e) {
         console.error(e);
-        return NextResponse.json({ error: e.message, stack: e.stack }, { status: 500 });
+        return NextResponse.json({ error: e.message }, { status: 500 });
     }
 }
