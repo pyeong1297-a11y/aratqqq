@@ -94,7 +94,7 @@ export async function fetchPrices(tickers, startDate, endDate, warmupDays = 400)
             continue;
         }
         const { ticker, data } = r.value;
-        const { dates, adjClose, open, low } = data;
+        const { dates, adjClose, open, high, low } = data;
 
         for (let i = 0; i < dates.length; i++) {
             const dateStr = dates[i].toISOString().split('T')[0];
@@ -105,6 +105,7 @@ export async function fetchPrices(tickers, startDate, endDate, warmupDays = 400)
                 entry[ticker] = price;
                 // 레버리지 ETF의 OHLC도 저장 (티커 이름으로 따로 저장)
                 if (open[i] != null) entry[`${ticker}_open`] = open[i];
+                if (high[i] != null) entry[`${ticker}_high`] = high[i];
                 if (low[i] != null) entry[`${ticker}_low`] = low[i];
             }
         }
@@ -166,6 +167,7 @@ export async function prepareBacktestData(leverTicker, startDate, endDate, maPer
             leverATH,
             leverDD,
             leverOpen: entry[`${leverTicker}_open`] ?? leverPrice,
+            leverHigh: entry[`${leverTicker}_high`] ?? Math.max(leverPrice, entry[`${leverTicker}_open`] ?? leverPrice),
             leverLow: entry[`${leverTicker}_low`] ?? leverPrice,
         });
     }

@@ -178,6 +178,7 @@ export class Backtester {
             const condition = determineMarketCondition(leverPrice, ma200);
 
             const openP = row.leverOpen || leverPrice;
+            const highP = row.leverHigh || Math.max(leverPrice, openP);
 
             // 가짜돌파 방지 및 부정입학 판단
             let sneakEntry = false;
@@ -186,12 +187,16 @@ export class Backtester {
             if (this.confirmCross) {
                 if (prevCondition === MarketCondition.DECLINE && (condition === MarketCondition.INVEST || condition === MarketCondition.OVERHEAT)) {
                     // 하락장에서 투자/과열장으로 진입
-                    if (condition === MarketCondition.OVERHEAT && openP > ma200) {
-                        // 시가부터 200일선 위로 갭상승하여 과열까지 간 경우 -> 부정입학
+                    if (condition === MarketCondition.OVERHEAT) {
+                        // 종가가 과열로 마무리되면 무조건 부정입학
                         waitingForConfirm = false;
                         sneakEntry = true;
+                    } else if (condition === MarketCondition.INVEST && highP > ma200 * 1.05) {
+                        // 종가는 집중투자 구간이지만 장중 고가가 과열(ma200 * 1.05)을 터치한 경우 가짜신호로 보지 않고 즉시 진입
+                        waitingForConfirm = false;
+                        justConfirmed = true;
                     } else {
-                        // 장중 돌파 -> 가짜돌파 대기
+                        // 일반적인 장중 돌파 -> 가짜돌파 1일 대기
                         waitingForConfirm = true;
                     }
                 } else if (waitingForConfirm) {
