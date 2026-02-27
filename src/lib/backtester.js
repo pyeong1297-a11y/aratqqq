@@ -177,30 +177,50 @@ export class Backtester {
             // 시장 상황
             const condition = determineMarketCondition(leverPrice, ma200);
 
-            // 가짜돌파 방지
+            const openP = row.leverOpen || leverPrice;
+
+            // 가짜돌파 방지 및 부정입학 판단
+            let sneakEntry = false;
+            let justConfirmed = false;
+
             if (this.confirmCross) {
-                if (prevCondition === MarketCondition.DECLINE && condition === MarketCondition.INVEST) {
-                    waitingForConfirm = true;
-                } else if (condition === MarketCondition.INVEST && prevCondition === MarketCondition.INVEST) {
-                    waitingForConfirm = false;
-                } else if (condition !== MarketCondition.INVEST) {
+                if (prevCondition === MarketCondition.DECLINE && (condition === MarketCondition.INVEST || condition === MarketCondition.OVERHEAT)) {
+                    // 하락장에서 투자/과열장으로 진입
+                    if (condition === MarketCondition.OVERHEAT && openP > ma200) {
+                        // 시가부터 200일선 위로 갭상승하여 과열까지 간 경우 -> 부정입학
+                        waitingForConfirm = false;
+                        sneakEntry = true;
+                    } else {
+                        // 장중 돌파 -> 가짜돌파 대기
+                        waitingForConfirm = true;
+                    }
+                } else if (waitingForConfirm) {
+                    if (condition === MarketCondition.INVEST || condition === MarketCondition.OVERHEAT) {
+                        // 대기 후 확인됨 -> 진입
+                        waitingForConfirm = false;
+                        justConfirmed = true;
+                    } else {
+                        waitingForConfirm = false;
+                    }
+                } else if (prevCondition === MarketCondition.INVEST && condition === MarketCondition.OVERHEAT) {
+                    if (openP > ma200 * 1.05) {
+                        sneakEntry = true;
+                    }
+                } else if (condition !== MarketCondition.INVEST && condition !== MarketCondition.OVERHEAT) {
                     waitingForConfirm = false;
                 }
             } else {
                 waitingForConfirm = false;
+                sneakEntry = (
+                    (prevCondition === MarketCondition.DECLINE || prevCondition === MarketCondition.INVEST)
+                    && condition === MarketCondition.OVERHEAT
+                );
             }
-
-            // 부정입학 감지
-            const sneakEntry = (
-                (prevCondition === MarketCondition.DECLINE || prevCondition === MarketCondition.INVEST)
-                && condition === MarketCondition.OVERHEAT
-            );
 
             // 스탑로스 체크
             let stoplossTriggered = false;
             let stoplossExecPrice = leverPrice;
             if (p.leverShares > 0 && p.leverAvgPrice > 0) {
-                const openP = row.leverOpen || leverPrice;
                 const lowP = row.leverLow || leverPrice;
                 const slRef = gapEntrySlRef > 0 ? gapEntrySlRef : p.leverAvgPrice;
                 const sl = checkStoploss(openP, lowP, leverPrice, slRef, this.stoplostPct);
@@ -263,6 +283,11 @@ export class Backtester {
                     const sgovInfo = this._sgovInterestInfo(p, sgovPrice, sgovBuyCost, sgovBuyDate, date);
                     if (waitingForConfirm) {
                         tradeAction = tradeAction || `⏳ 200일선 가짜돌파 확인중 (1일 대기)`;
+                    } else if (justConfirmed) {
+                        p.sellSgov(sgovPrice);
+                        p.buyLever(leverPrice, p.cash);
+                        sgovBuyCost = 0; sgovBuyDate = null;
+                        tradeAction = `📈 집중투자(돌파확인): SGOV -> ${lt} $${(p.leverShares * leverPrice).toFixed(0)} (체결가$${leverPrice.toFixed(2)})${sgovInfo}`;
                     } else {
                         p.sellSgov(sgovPrice);
                         p.buyLever(leverPrice, p.cash);
@@ -284,7 +309,15 @@ export class Backtester {
 
                 if (p.sgovShares > 0) {
                     const sgovInfo = this._sgovInterestInfo(p, sgovPrice, sgovBuyCost, sgovBuyDate, date);
-                    if (sneakEntry) {
+                    if (waitingForConfirm) {
+                        tradeAction = tradeAction || `⏳ 200일선 가짜돌파 확인중 (1일 대기)`;
+                    } else if (justConfirmed) {
+                        p.sellSgov(sgovPrice);
+                        p.buyLever(leverPrice, p.cash);
+                        sgovBuyCost = 0; sgovBuyDate = null;
+                        const msg = `📈 과열구간 돌파매수: SGOV -> ${lt} $${(p.leverShares * leverPrice).toFixed(0)} (체결가$${leverPrice.toFixed(2)})${sgovInfo}`;
+                        tradeAction = tradeAction ? `${tradeAction} + ${msg}` : msg;
+                    } else if (sneakEntry) {
                         p.sellSgov(sgovPrice);
                         p.buyLever(leverPrice, p.cash);
                         sgovBuyCost = 0; sgovBuyDate = null;
