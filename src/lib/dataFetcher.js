@@ -94,15 +94,18 @@ export async function fetchPrices(tickers, startDate, endDate, warmupDays = 400)
             continue;
         }
         const { ticker, data } = r.value;
-        const { dates, adjClose, open, high, low } = data;
+        const { dates, adjClose, open, high, low, close } = data;
 
         for (let i = 0; i < dates.length; i++) {
             const dateStr = dates[i].toISOString().split('T')[0];
             if (!pricesByDate.has(dateStr)) pricesByDate.set(dateStr, {});
             const entry = pricesByDate.get(dateStr);
-            const price = adjClose[i];
+
+            const price = adjClose[i]; // Adjusted Close
+
             if (price != null && !isNaN(price) && price > 0) {
                 entry[ticker] = price;
+
                 // 레버리지 ETF의 OHLC도 저장 (티커 이름으로 따로 저장)
                 if (open[i] != null) entry[`${ticker}_open`] = open[i];
                 if (high[i] != null) entry[`${ticker}_high`] = high[i];
@@ -123,7 +126,7 @@ export async function prepareBacktestData(leverTicker, startDate, endDate, maPer
     const earliest = TICKER_EARLIEST_DATE[leverTicker];
     const adjStart = earliest && earliest > startDate ? earliest : startDate;
 
-    const allTickers = [...new Set([leverTicker, SAFE_ASSET, PROFIT_ASSET, ...BENCHMARK_TICKERS])];
+    const allTickers = [...new Set([leverTicker, SAFE_ASSET, PROFIT_ASSET, 'BIL', ...BENCHMARK_TICKERS])];
     const pricesByDate = await fetchPrices(allTickers, adjStart, endDate, maPeriod * 2);
 
     // 날짜 정렬
@@ -172,8 +175,9 @@ export async function prepareBacktestData(leverTicker, startDate, endDate, maPer
         });
     }
 
-    // SGOV null 구간 forward fill (BIL fetch로 보완)
-    let lastSgov = 1.0;
+    // SGOV null 구간 forward/backward fill
+    const firstValidSgov = rows.find(r => r.SGOV != null)?.SGOV || 1.0;
+    let lastSgov = firstValidSgov;
     for (const row of rows) {
         if (row.SGOV != null) { lastSgov = row.SGOV; }
         else { row.SGOV = lastSgov; }
