@@ -24,7 +24,7 @@ const TICKERS_STATIC = [
 const fmt = (v, d = 2) =>
     v == null ? '-' : v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 
-// ─── Toggle Switch Component ────────────────────────────────────────────────
+// ─── Toggle Switch ───────────────────────────────────────────────────────────
 function Toggle({ checked, onChange }) {
     return (
         <label style={{ position: 'relative', width: 40, height: 22, display: 'inline-block', flexShrink: 0 }}>
@@ -62,12 +62,81 @@ const Field = ({ label, children }) => (
     </div>
 );
 
+// ─── TickerSelector (재사용) ──────────────────────────────────────────────────
+function TickerSelector({ selected, custom, onSelect, onCustom, label, accentColor, inputStyle }) {
+    return (
+        <div style={{ marginBottom: 0 }}>
+            {label && <div style={{ fontSize: '.72rem', color: '#8b949e', marginBottom: 6 }}>{label}</div>}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5, marginBottom: 6 }}>
+                {TICKERS_STATIC.map(t => {
+                    const isActive = (custom ? custom === t.ticker : selected === t.ticker) && !custom;
+                    return (
+                        <div key={t.ticker}
+                            onClick={() => { onSelect(t.ticker); onCustom(''); }}
+                            style={{
+                                background: isActive ? `rgba(${accentColor},0.10)` : '#21262d',
+                                border: `2px solid ${isActive ? `rgb(${accentColor})` : '#30363d'}`,
+                                borderRadius: 8, padding: '7px 5px', cursor: 'pointer', textAlign: 'center', transition: 'all .15s',
+                            }}>
+                            <div style={{ fontSize: '.9rem', fontWeight: 700, color: `rgb(${accentColor})`, fontFamily: 'monospace' }}>{t.ticker}</div>
+                            <div style={{ fontSize: '.6rem', color: '#8b949e', marginTop: 1 }}>{t.description}</div>
+                        </div>
+                    );
+                })}
+            </div>
+            <input
+                type="text" maxLength={10}
+                placeholder="직접 입력 (예: FNGU)"
+                value={custom}
+                onChange={e => { onCustom(e.target.value.toUpperCase()); onSelect(''); }}
+                style={{ ...inputStyle, fontFamily: 'monospace', fontWeight: 700, border: `2px solid ${custom ? `rgb(${accentColor})` : '#30363d'}` }}
+            />
+        </div>
+    );
+}
+
+// ─── CompareMetricRow ─────────────────────────────────────────────────────────
+function CompareMetricRow({ label, v1, v2, ticker1, ticker2, color1, color2, higherIsBetter = true }) {
+    const n1 = parseFloat(v1);
+    const n2 = parseFloat(v2);
+    const win1 = !isNaN(n1) && !isNaN(n2) && (higherIsBetter ? n1 > n2 : n1 < n2);
+    const win2 = !isNaN(n1) && !isNaN(n2) && (higherIsBetter ? n2 > n1 : n2 < n1);
+    return (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px 1fr', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+            <div style={{
+                background: win1 ? 'rgba(0,212,170,0.08)' : '#161b22',
+                border: `1px solid ${win1 ? '#00d4aa55' : '#30363d'}`,
+                borderRadius: 8, padding: '9px 8px', textAlign: 'center'
+            }}>
+                <div style={{ fontSize: '.72rem', color: color1, fontWeight: 700, marginBottom: 3 }}>{ticker1}</div>
+                <div style={{ fontSize: '1rem', fontWeight: 700, fontFamily: 'monospace', color: win1 ? '#00d4aa' : '#e6edf3' }}>{v1}{win1 ? ' 🏆' : ''}</div>
+            </div>
+            <div style={{ textAlign: 'center', fontSize: '.72rem', color: '#8b949e', fontWeight: 600 }}>{label}</div>
+            <div style={{
+                background: win2 ? 'rgba(255,179,71,0.08)' : '#161b22',
+                border: `1px solid ${win2 ? '#ffb34755' : '#30363d'}`,
+                borderRadius: 8, padding: '9px 8px', textAlign: 'center'
+            }}>
+                <div style={{ fontSize: '.72rem', color: color2, fontWeight: 700, marginBottom: 3 }}>{ticker2}</div>
+                <div style={{ fontSize: '1rem', fontWeight: 700, fontFamily: 'monospace', color: win2 ? '#ffb347' : '#e6edf3' }}>{v2}{win2 ? ' 🏆' : ''}</div>
+            </div>
+        </div>
+    );
+}
+
 // ─── Main Page ───────────────────────────────────────────────────────────────
 export default function HomePage() {
+    // Mode
+    const [compareMode, setCompareMode] = useState(false);
+
+    // Ticker (공통)
     const [selectedTicker, setSelectedTicker] = useState('TQQQ');
     const [customTicker, setCustomTicker] = useState('');
+    const [selectedTicker2, setSelectedTicker2] = useState('BULZ');
+    const [customTicker2, setCustomTicker2] = useState('');
+
     const [form, setForm] = useState({
-        start_date: '2016-01-01',
+        start_date: '2021-08-18',
         end_date: new Date().toISOString().split('T')[0],
         initial_capital: 10000,
         monthly_contribution: 0,
@@ -83,6 +152,7 @@ export default function HomePage() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [result, setResult] = useState(null);
+    const [result2, setResult2] = useState(null);
     const [trades, setTrades] = useState([]);
     const [filter, setFilter] = useState('');
     const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -93,29 +163,43 @@ export default function HomePage() {
     const priceChart = useRef(null);
 
     const activeTicker = customTicker || selectedTicker;
+    const activeTicker2 = customTicker2 || selectedTicker2;
 
     function setField(key, val) {
         setForm(f => ({ ...f, [key]: val }));
     }
 
     useEffect(() => {
-        if (result && !loading) renderCharts(result);
-    }, [result, loading]);
+        if (result && !loading) renderCharts(result, result2);
+    }, [result, result2, loading]);
+
+    async function callApi(ticker) {
+        const res = await fetch('/api/backtest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...form, lever_ticker: ticker }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        return data;
+    }
 
     async function runBacktest() {
         setLoading(true);
         setError('');
-        setSidebarOpen(false);  // 모바일에서 실행 후 자동으로 사이드바 닫기
+        setSidebarOpen(false);
         try {
-            const res = await fetch('/api/backtest', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ...form, lever_ticker: activeTicker }),
-            });
-            const data = await res.json();
-            if (data.error) { setError(data.error); return; }
-            setResult(data);
-            setTrades(data.trades || []);
+            if (compareMode) {
+                const [r1, r2] = await Promise.all([callApi(activeTicker), callApi(activeTicker2)]);
+                setResult(r1);
+                setResult2(r2);
+                setTrades(r1.trades || []);
+            } else {
+                const r = await callApi(activeTicker);
+                setResult(r);
+                setResult2(null);
+                setTrades(r.trades || []);
+            }
         } catch (e) {
             setError(e.message);
         } finally {
@@ -123,7 +207,7 @@ export default function HomePage() {
         }
     }
 
-    function renderCharts(data) {
+    function renderCharts(data, data2 = null) {
         const { chart_data, trades: tradesList } = data;
         if (!chart_data) return;
         const labels = chart_data.dates;
@@ -135,22 +219,45 @@ export default function HomePage() {
             QLD: { color: '#c9a227', bw: 1.2 },
             TQQQ: { color: '#e67e22', bw: 1.4 },
         };
-        const bmDatasets = Object.entries(chart_data.benchmarks || {}).map(([ticker, values]) => ({
+        const bmDatasets = data2 ? [] : Object.entries(chart_data.benchmarks || {}).map(([ticker, values]) => ({
             label: ticker, data: values,
             borderColor: bmStyles[ticker]?.color || '#f39c12',
             borderWidth: bmStyles[ticker]?.bw || 1.2,
             pointRadius: 0, tension: 0.2,
         }));
 
+        const strategy1Dataset = {
+            label: `ARA 전략 (${data.lever_ticker})`,
+            data: chart_data.strategyValues,
+            borderColor: '#00d4aa', borderWidth: 2.5,
+            pointRadius: 0, tension: 0.2, fill: false,
+        };
+
+        const extraDatasets = [];
+        if (data2?.chart_data) {
+            // 두 번째 ETF의 날짜를 기준으로 매핑
+            const labelSet = new Set(labels);
+            const dates2 = data2.chart_data.dates;
+            const vals2 = data2.chart_data.strategyValues;
+            // 첫 번째 레이블 배열에 맞춰 정렬
+            const mapped2 = labels.map(d => {
+                const idx = dates2.indexOf(d);
+                return idx >= 0 ? vals2[idx] : null;
+            });
+            extraDatasets.push({
+                label: `ARA 전략 (${data2.lever_ticker})`,
+                data: mapped2,
+                borderColor: '#ffb347', borderWidth: 2.5,
+                pointRadius: 0, tension: 0.2, fill: false,
+                borderDash: data2 ? [] : [4, 3],
+            });
+        }
+
         portfolioChart.current = new Chart(portfolioChartRef.current, {
             type: 'line',
             data: {
                 labels,
-                datasets: [...bmDatasets, {
-                    label: 'ARA 전략', data: chart_data.strategyValues,
-                    borderColor: '#00d4aa', borderWidth: 2.5,
-                    pointRadius: 0, tension: 0.2, fill: false,
-                }],
+                datasets: [...bmDatasets, strategy1Dataset, ...extraDatasets],
             },
             options: {
                 responsive: true, maintainAspectRatio: false, animation: false,
@@ -191,16 +298,28 @@ export default function HomePage() {
             },
         };
 
+        const priceDatasets = [
+            { label: `${data.lever_ticker} 가격`, data: chart_data.leverPrices, borderColor: '#00d4aa', borderWidth: 1.4, pointRadius: 0, tension: 0.1 },
+            { label: `MA${result?.ma_period || 200}`, data: chart_data.ma200.map(v => v > 0 ? v : null), borderColor: '#ff9500', borderWidth: 1.8, borderDash: [4, 3], pointRadius: 0, tension: 0.1 },
+            eventsDataset,
+        ];
+
+        if (data2?.chart_data) {
+            const dates2 = data2.chart_data.dates;
+            const mapped2 = labels.map(d => {
+                const idx = dates2.indexOf(d);
+                return idx >= 0 ? data2.chart_data.leverPrices[idx] : null;
+            });
+            priceDatasets.unshift({
+                label: `${data2.lever_ticker} 가격`,
+                data: mapped2,
+                borderColor: '#ffb347', borderWidth: 1.4, pointRadius: 0, tension: 0.1,
+            });
+        }
+
         priceChart.current = new Chart(priceChartRef.current, {
             type: 'line',
-            data: {
-                labels,
-                datasets: [
-                    { label: `${data.lever_ticker} 가격`, data: chart_data.leverPrices, borderColor: '#58a6ff', borderWidth: 1.4, pointRadius: 0, tension: 0.1 },
-                    { label: `MA${result.ma_period}`, data: chart_data.ma200.map(v => v > 0 ? v : null), borderColor: '#ff9500', borderWidth: 1.8, borderDash: [4, 3], pointRadius: 0, tension: 0.1 },
-                    eventsDataset,
-                ],
-            },
+            data: { labels, datasets: priceDatasets },
             options: {
                 responsive: true, maintainAspectRatio: false, animation: false,
                 plugins: {
@@ -230,8 +349,6 @@ export default function HomePage() {
         return <span style={{ background: cfg[0], color: cfg[1], padding: '1px 8px', borderRadius: 10, fontSize: '.7rem', fontWeight: 600, whiteSpace: 'nowrap' }}>{c}</span>;
     };
 
-
-
     const inputStyle = {
         background: '#21262d', border: '1px solid #30363d', borderRadius: 6,
         color: '#e6edf3', fontSize: '.875rem', padding: '7px 10px',
@@ -247,7 +364,6 @@ export default function HomePage() {
                 @keyframes fadeIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
                 input:focus, select:focus { border-color: #00d4aa !important; outline: none; }
 
-                /* Layout */
                 .layout {
                     display: grid;
                     grid-template-columns: 300px 1fr;
@@ -257,7 +373,6 @@ export default function HomePage() {
                     margin: 0 auto;
                 }
 
-                /* Mobile overlay sidebar */
                 .sidebar-overlay {
                     display: none;
                     position: fixed; inset: 0;
@@ -269,7 +384,6 @@ export default function HomePage() {
                     display: flex; flex-direction: column; gap: 10px;
                 }
 
-                /* Metrics grid */
                 .metrics-grid {
                     display: grid;
                     grid-template-columns: repeat(5, 1fr);
@@ -277,21 +391,17 @@ export default function HomePage() {
                     margin-bottom: 12px;
                 }
 
-                /* Benchmark row */
                 .bm-row {
                     display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center;
                 }
 
-                /* Charts */
                 .chart-box { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 12px; margin-bottom: 10px; }
                 .chart-portfolio { height: 260px; }
                 .chart-price { height: 220px; }
 
-                /* Card */
                 .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 14px; }
                 .card-title { font-size: .74rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: #8b949e; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #30363d; }
 
-                /* Mobile menu button */
                 .mobile-menu-btn {
                     display: none;
                     background: #161b22; border: 1px solid #30363d;
@@ -299,7 +409,24 @@ export default function HomePage() {
                     border-radius: 8px; cursor: pointer; font-size: .85rem;
                 }
 
-                /* 반응형 */
+                .mode-tabs {
+                    display: flex; background: #21262d; border-radius: 8px; padding: 3px; gap: 3px;
+                }
+                .mode-tab {
+                    flex: 1; padding: 6px 0; text-align: center; font-size: .8rem; font-weight: 600;
+                    border-radius: 6px; cursor: pointer; transition: background .2s, color .2s;
+                    color: #8b949e; border: none; background: none;
+                }
+                .mode-tab.active {
+                    background: #0d1117; color: #e6edf3;
+                }
+
+                .compare-split {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 8px;
+                }
+
                 @media (max-width: 900px) {
                     .layout {
                         grid-template-columns: 1fr;
@@ -321,6 +448,7 @@ export default function HomePage() {
                     .mobile-menu-btn { display: inline-flex; align-items: center; gap: 6px; }
                     .chart-portfolio { height: 220px; }
                     .chart-price { height: 180px; }
+                    .compare-split { grid-template-columns: 1fr; }
                 }
                 @media (max-width: 500px) {
                     .metrics-grid { grid-template-columns: repeat(2, 1fr); }
@@ -333,7 +461,7 @@ export default function HomePage() {
             {loading && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(13,17,23,.85)', zIndex: 999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
                     <div style={{ width: 44, height: 44, border: '4px solid #30363d', borderTopColor: '#00d4aa', borderRadius: '50%', animation: 'spin .8s linear infinite' }} />
-                    <div style={{ color: '#00d4aa', fontSize: '.9rem' }}>백테스트 실행 중…</div>
+                    <div style={{ color: '#00d4aa', fontSize: '.9rem' }}>백테스트 실행 중…{compareMode ? ` (${activeTicker} + ${activeTicker2})` : ''}</div>
                 </div>
             )}
             {error && (
@@ -343,7 +471,6 @@ export default function HomePage() {
                 </div>
             )}
 
-            {/* Mobile overlay */}
             <div className={`sidebar-overlay${sidebarOpen ? ' open' : ''}`} onClick={() => setSidebarOpen(false)} />
 
             {/* Header */}
@@ -355,48 +482,74 @@ export default function HomePage() {
                         <p style={{ fontSize: '.72rem', color: '#8b949e', marginTop: 1 }}>레버리지 ETF 200일선 투자법</p>
                     </div>
                 </div>
+
+                {/* Mode Tabs (header center) */}
+                <div className="mode-tabs" style={{ width: 220 }}>
+                    <button className={`mode-tab${!compareMode ? ' active' : ''}`}
+                        onClick={() => { setCompareMode(false); setResult(null); setResult2(null); }}>
+                        📊 단일 분석
+                    </button>
+                    <button className={`mode-tab${compareMode ? ' active' : ''}`}
+                        onClick={() => { setCompareMode(true); setResult(null); setResult2(null); }}>
+                        ⚡ ETF 비교
+                    </button>
+                </div>
+
                 <button className="mobile-menu-btn" onClick={() => setSidebarOpen(o => !o)}>
                     ⚙️ 설정
                 </button>
             </header>
 
             <div className="layout">
-                {/* ══ Sidebar (settings) ════════════════════════════════════════ */}
+                {/* ══ Sidebar ════════════════════════════════════════════════════ */}
                 <aside className={`sidebar${sidebarOpen ? ' open' : ''}`}>
 
-                    {/* 모바일 닫기 */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div className="card-title" style={{ margin: 0, border: 'none', padding: 0 }}>⚙️ 설정</div>
                         <button onClick={() => setSidebarOpen(false)}
                             style={{ background: 'none', border: 'none', color: '#8b949e', fontSize: '1.2rem', cursor: 'pointer', padding: 4 }}>✕</button>
                     </div>
 
-                    {/* 티커 선택 */}
-                    <div className="card">
-                        <div className="card-title">📌 레버리지 ETF 선택</div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 }}>
-                            {TICKERS_STATIC.map(t => (
-                                <div key={t.ticker}
-                                    onClick={() => { setSelectedTicker(t.ticker); setCustomTicker(''); }}
-                                    style={{
-                                        background: (activeTicker === t.ticker && !customTicker) ? 'rgba(0,212,170,.08)' : '#21262d',
-                                        border: `2px solid ${(activeTicker === t.ticker && !customTicker) ? '#00d4aa' : '#30363d'}`,
-                                        borderRadius: 8, padding: '8px 6px', cursor: 'pointer', textAlign: 'center', transition: 'all .15s',
-                                    }}>
-                                    <div style={{ fontSize: '.95rem', fontWeight: 700, color: '#00d4aa', fontFamily: 'monospace' }}>{t.ticker}</div>
-                                    <div style={{ fontSize: '.63rem', color: '#8b949e', marginTop: 2 }}>{t.description}</div>
-                                    <div style={{ fontSize: '.6rem', color: '#8b949e', opacity: .7 }}>from {t.earliest_date}</div>
-                                </div>
-                            ))}
+                    {/* ETF 선택 */}
+                    {!compareMode ? (
+                        /* 단일 모드 */
+                        <div className="card">
+                            <div className="card-title">📌 레버리지 ETF 선택</div>
+                            <TickerSelector
+                                selected={selectedTicker} custom={customTicker}
+                                onSelect={setSelectedTicker} onCustom={setCustomTicker}
+                                accentColor="0,212,170" inputStyle={inputStyle}
+                            />
                         </div>
-                        <input
-                            type="text" maxLength={10}
-                            placeholder="직접 입력 (예: FNGU)"
-                            value={customTicker}
-                            onChange={e => setCustomTicker(e.target.value.toUpperCase())}
-                            style={{ ...inputStyle, fontFamily: 'monospace', fontWeight: 700, border: `2px solid ${customTicker ? '#00d4aa' : '#30363d'}` }}
-                        />
-                    </div>
+                    ) : (
+                        /* 비교 모드 */
+                        <div className="card">
+                            <div className="card-title">⚡ 비교 ETF 선택</div>
+                            <div style={{ marginBottom: 12 }}>
+                                <div style={{ fontSize: '.75rem', color: '#00d4aa', fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#00d4aa', display: 'inline-block' }} />
+                                    ETF A
+                                </div>
+                                <TickerSelector
+                                    selected={selectedTicker} custom={customTicker}
+                                    onSelect={setSelectedTicker} onCustom={setCustomTicker}
+                                    accentColor="0,212,170" inputStyle={inputStyle}
+                                />
+                            </div>
+                            <hr style={{ border: 'none', borderTop: '1px solid #30363d', margin: '10px 0' }} />
+                            <div>
+                                <div style={{ fontSize: '.75rem', color: '#ffb347', fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#ffb347', display: 'inline-block' }} />
+                                    ETF B
+                                </div>
+                                <TickerSelector
+                                    selected={selectedTicker2} custom={customTicker2}
+                                    onSelect={setSelectedTicker2} onCustom={setCustomTicker2}
+                                    accentColor="255,179,71" inputStyle={inputStyle}
+                                />
+                            </div>
+                        </div>
+                    )}
 
                     {/* 기본 설정 */}
                     <div className="card">
@@ -447,33 +600,29 @@ export default function HomePage() {
                                 </div>
                                 {form.profit_full_exit && (
                                     <div style={{ background: 'rgba(255,215,0,.07)', border: '1px solid rgba(255,215,0,.25)', borderRadius: 6, padding: '6px 10px', fontSize: '.72rem', color: '#ffd700', lineHeight: 1.5 }}>
-                                        <b>{form.profit_start}%</b> 익절 후 남은 물량을 <b>{form.profit_start + form.profit_spacing}%</b>에서 전량 매도합니다. 3배 이상 익절 없이 완전 청산.
+                                        <b>{form.profit_start}%</b> 익절 후 남은 물량을 <b>{form.profit_start + form.profit_spacing}%</b>에서 전량 매도합니다.
                                     </div>
                                 )}
                             </>
                         )}
-
                     </div>
 
                     {/* 실행 버튼 */}
                     <button
                         onClick={runBacktest} disabled={loading}
-                        style={{ width: '100%', padding: '13px', background: 'linear-gradient(135deg,#00d4aa,#00a882)', color: '#000', border: 'none', borderRadius: 8, fontSize: '.95rem', fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? .45 : 1, transition: 'opacity .2s' }}>
-                        {loading ? '⏳ 실행 중...' : '🚀 백테스트 실행'}
+                        style={{ width: '100%', padding: '13px', background: compareMode ? 'linear-gradient(135deg,#00d4aa,#ffb347)' : 'linear-gradient(135deg,#00d4aa,#00a882)', color: '#000', border: 'none', borderRadius: 8, fontSize: '.95rem', fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? .45 : 1, transition: 'opacity .2s' }}>
+                        {loading ? '⏳ 실행 중...' : compareMode ? `⚡ ${activeTicker} vs ${activeTicker2} 비교 실행` : '🚀 백테스트 실행'}
                     </button>
                 </aside>
 
                 {/* ══ Main Content ══════════════════════════════════════════════ */}
                 <main style={{ minWidth: 0 }}>
-
-                    {/* 모바일 실행 버튼 (데스크탑에서 숨김) */}
                     <div style={{ display: 'flex', gap: 8, marginBottom: 10, justifyContent: 'flex-end' }}>
-                        <button onClick={() => setSidebarOpen(true)}
-                            className="mobile-menu-btn">⚙️ 설정 열기</button>
+                        <button onClick={() => setSidebarOpen(true)} className="mobile-menu-btn">⚙️ 설정 열기</button>
                     </div>
 
-                    {/* 성과 지표 */}
-                    {result && (
+                    {/* ─── 단일 모드 결과 ─────────────────────────────────────── */}
+                    {!compareMode && result && (
                         <>
                             <div style={{
                                 background: result.result.current_condition === '집중투자' ? 'rgba(77,255,136,.08)' : result.result.current_condition === '과열' ? 'rgba(255,215,0,.08)' : 'rgba(255,107,107,.08)',
@@ -509,15 +658,85 @@ export default function HomePage() {
                         </>
                     )}
 
-                    {/* 포트폴리오 차트 */}
+                    {/* ─── 비교 모드 결과 ─────────────────────────────────────── */}
+                    {compareMode && result && result2 && (
+                        <>
+                            {/* 헤더 기간 */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                                <div style={{ fontSize: '.78rem', color: '#8b949e' }}>
+                                    📅 비교 기간: <b style={{ color: '#e6edf3' }}>{result.data_period}</b>
+                                </div>
+                                <div style={{ display: 'flex', gap: 10 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '.78rem' }}>
+                                        <span style={{ width: 10, height: 3, background: '#00d4aa', display: 'inline-block', borderRadius: 2 }} />
+                                        <span style={{ color: '#00d4aa', fontWeight: 700 }}>{activeTicker}</span>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '.78rem' }}>
+                                        <span style={{ width: 10, height: 3, background: '#ffb347', display: 'inline-block', borderRadius: 2 }} />
+                                        <span style={{ color: '#ffb347', fontWeight: 700 }}>{activeTicker2}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* 비교 지표 행 */}
+                            <div style={{ background: '#161b22', border: '1px solid #30363d', borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                                <CompareMetricRow
+                                    label="최종 자산"
+                                    v1={`$${fmt(result.result.final_value, 0)}`}
+                                    v2={`$${fmt(result2.result.final_value, 0)}`}
+                                    ticker1={activeTicker} ticker2={activeTicker2}
+                                    color1="#00d4aa" color2="#ffb347"
+                                    higherIsBetter={true}
+                                />
+                                <CompareMetricRow
+                                    label="총 수익률"
+                                    v1={`${fmt(result.result.total_return, 1)}%`}
+                                    v2={`${fmt(result2.result.total_return, 1)}%`}
+                                    ticker1={activeTicker} ticker2={activeTicker2}
+                                    color1="#00d4aa" color2="#ffb347"
+                                    higherIsBetter={true}
+                                />
+                                <CompareMetricRow
+                                    label="CAGR"
+                                    v1={`${fmt(result.result.cagr, 1)}%`}
+                                    v2={`${fmt(result2.result.cagr, 1)}%`}
+                                    ticker1={activeTicker} ticker2={activeTicker2}
+                                    color1="#00d4aa" color2="#ffb347"
+                                    higherIsBetter={true}
+                                />
+                                <CompareMetricRow
+                                    label="MDD"
+                                    v1={`${fmt(result.result.mdd, 1)}%`}
+                                    v2={`${fmt(result2.result.mdd, 1)}%`}
+                                    ticker1={activeTicker} ticker2={activeTicker2}
+                                    color1="#00d4aa" color2="#ffb347"
+                                    higherIsBetter={false}
+                                />
+                                <div style={{ marginBottom: 0 }}>
+                                    <CompareMetricRow
+                                        label="거래 횟수"
+                                        v1={`${result.result.trades_count}`}
+                                        v2={`${result2.result.trades_count}`}
+                                        ticker1={activeTicker} ticker2={activeTicker2}
+                                        color1="#00d4aa" color2="#ffb347"
+                                        higherIsBetter={false}
+                                    />
+                                </div>
+                            </div>
+                        </>
+                    )}
+
+                    {/* ─── 포트폴리오 차트 ───────────────────────────────────── */}
                     <div className="chart-box chart-portfolio">
                         {!result
-                            ? <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8b949e', fontSize: '.85rem', textAlign: 'center' }}>⬅ 설정 후 백테스트를 실행하면 결과가 표시됩니다</div>
+                            ? <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8b949e', fontSize: '.85rem', textAlign: 'center' }}>
+                                {compareMode ? '⬅ 두 ETF를 선택 후 비교 실행하면 결과가 표시됩니다' : '⬅ 설정 후 백테스트를 실행하면 결과가 표시됩니다'}
+                            </div>
                             : <canvas ref={portfolioChartRef} style={{ width: '100%', height: '100%' }} />
                         }
                     </div>
 
-                    {/* 가격 차트 */}
+                    {/* ─── 가격 차트 ─────────────────────────────────────────── */}
                     <div className="chart-box chart-price">
                         {!result
                             ? <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#8b949e', fontSize: '.85rem' }}>ETF 가격 및 거래 이벤트</div>
@@ -525,11 +744,13 @@ export default function HomePage() {
                         }
                     </div>
 
-                    {/* 거래 내역 */}
+                    {/* ─── 거래 내역 ─────────────────────────────────────────── */}
                     {result && (
                         <div className="card">
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
-                                <span style={{ fontSize: '.78rem', fontWeight: 600, color: '#8b949e', textTransform: 'uppercase', letterSpacing: '.06em' }}>거래 내역</span>
+                                <span style={{ fontSize: '.78rem', fontWeight: 600, color: '#8b949e', textTransform: 'uppercase', letterSpacing: '.06em' }}>
+                                    거래 내역 {compareMode ? `(${activeTicker})` : ''}
+                                </span>
                                 <div style={{ display: 'flex', gap: 6 }}>
                                     <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="검색..." style={{ ...inputStyle, width: 140, padding: '5px 8px', fontSize: '.75rem' }} />
                                     <button
