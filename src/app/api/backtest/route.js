@@ -12,13 +12,15 @@ export async function POST(req) {
         const startDate = body.start_date || '2016-01-01';
         const endDate = body.end_date || new Date().toISOString().split('T')[0];
         const maPeriod = parseInt(body.ma_period ?? 200, 10);
+
+        // 2구간 전략 파라미터
         const profitTaking = body.profit_taking !== false;
         const profitStart = parseFloat(body.profit_start ?? 100);
         const profitRatio = parseFloat(body.profit_ratio ?? 50) / 100;
         const profitSpacing = parseFloat(body.profit_spacing ?? 100);
-        const profitFullExit = body.profit_full_exit === true;
+        const profitToSpym = parseFloat(body.profit_to_spym ?? 50) / 100; // 익절금 중 SPYM 비율
         const stoplostPct = parseFloat(body.stoploss_pct ?? 5) / 100;
-        const confirmCross = body.confirm_cross !== false;
+        const consUpRequired = parseInt(body.cons_up_required ?? 2, 10); // 연속 상승 일수
 
         // 데이터 준비
         const data = await prepareBacktestData(leverTicker, startDate, endDate, maPeriod);
@@ -26,11 +28,11 @@ export async function POST(req) {
             return NextResponse.json({ error: '데이터 없음. 기간 또는 티커를 확인하세요.' }, { status: 400 });
         }
 
-        // 백테스트 실행
+        // 백테스트 실행 (2구간 전략)
         const bt = new Backtester({
             data, leverTicker, initialCapital, monthlyContribution,
-            profitTaking, profitStart, profitRatio, profitSpacing, profitFullExit,
-            stoplostPct, confirmCross,
+            profitTaking, profitStart, profitRatio, profitSpacing, profitToSpym,
+            stoplostPct, consUpRequired,
         });
         const result = bt.run();
         if (!result) return NextResponse.json({ error: '백테스트 실패' }, { status: 500 });
@@ -65,26 +67,19 @@ export async function POST(req) {
             ),
         };
 
-        // 거래내역 직렬화 (레이블 간소화)
+        // 거래내역 직렬화
         const tradesList = trades.map(t => {
             let label = null;
             const action = t.action || '';
-            if (action.includes('전량익절')) {
-                try {
-                    const pctStr = action.split('+')[1].split('%')[0];
-                    const multiple = Math.floor(parseFloat(pctStr) / 100);
-                    label = `${multiple}배🎯`;
-                } catch { label = '전량'; }
-            } else if (action.includes('익절')) {
+            if (action.includes('익절')) {
                 try {
                     const pctStr = action.split('+')[1].split('%')[0];
                     const multiple = Math.floor(parseFloat(pctStr) / 100);
                     label = `${multiple}배`;
                 } catch { label = '익절'; }
-            } else if (action.includes('스탑로스')) { label = 'S'; }
-            else if (action.includes('하락신호')) { label = 'M'; }
-            else if (action.includes('부정입학')) { label = 'B'; }
-            else if (action.includes('집중투자') && action.includes('SGOV')) { label = 'B'; }
+            } else if (action.includes('절반스탑로스') || action.includes('절반SL')) { label = 'S½'; }
+            else if (action.includes('하락(MA200 이탈)')) { label = 'M'; }
+            else if (action.includes('진입')) { label = 'B'; }
 
             return {
                 date: t.dateStr,

@@ -136,18 +136,18 @@ export default function HomePage() {
     const [customTicker2, setCustomTicker2] = useState('');
 
     const [form, setForm] = useState({
-        start_date: '2021-08-18',
+        start_date: '2016-01-01',
         end_date: new Date().toISOString().split('T')[0],
         initial_capital: 10000,
         monthly_contribution: 0,
         ma_period: 200,
-        confirm_cross: true,
         stoploss_pct: 5,
+        cons_up_required: 2,         // MA200 위 연속 일수
         profit_taking: true,
         profit_start: 100,
         profit_ratio: 50,
         profit_spacing: 100,
-        profit_full_exit: false,
+        profit_to_spym: 50,          // 익절금 중 SPYM 비율(%)
     });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
@@ -345,8 +345,11 @@ export default function HomePage() {
     );
 
     const condTag = c => {
-        const cfg = c === '하락' ? ['rgba(255,107,107,.15)', '#ff6b6b'] : c === '집중투자' ? ['rgba(77,255,136,.12)', '#4dff88'] : ['rgba(255,215,0,.12)', '#ffd700'];
-        return <span style={{ background: cfg[0], color: cfg[1], padding: '1px 8px', borderRadius: 10, fontSize: '.7rem', fontWeight: 600, whiteSpace: 'nowrap' }}>{c}</span>;
+        const cfg = c === 'SAFE'
+            ? ['rgba(255,107,107,.15)', '#ff6b6b']
+            : ['rgba(77,255,136,.12)', '#4dff88'];
+        const label = c === 'SAFE' ? '하락(대기)' : '투자중';
+        return <span style={{ background: cfg[0], color: cfg[1], padding: '1px 8px', borderRadius: 10, fontSize: '.7rem', fontWeight: 600, whiteSpace: 'nowrap' }}>{label}</span>;
     };
 
     const inputStyle = {
@@ -560,18 +563,19 @@ export default function HomePage() {
                             <Field label="초기 투자금 ($)"><input type="number" value={form.initial_capital} onChange={e => setField('initial_capital', +e.target.value)} min={100} step={1000} style={inputStyle} /></Field>
                             <Field label="월 적립금 ($)"><input type="number" value={form.monthly_contribution} onChange={e => setField('monthly_contribution', +e.target.value)} min={0} step={100} style={inputStyle} /></Field>
                             <Field label="이동평균선 (일)"><input type="number" value={form.ma_period} onChange={e => setField('ma_period', +e.target.value)} min={10} max={1000} step={10} style={inputStyle} /></Field>
+                            <Field label="연속 상승 일수 (진입 기준)">
+                                <input type="number" value={form.cons_up_required} onChange={e => setField('cons_up_required', Math.max(1, +e.target.value))} min={1} max={10} step={1} style={inputStyle} />
+                            </Field>
                         </div>
                         <hr style={{ border: 'none', borderTop: '1px solid #30363d', margin: '8px 0' }} />
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                            <span style={{ fontSize: '.8rem' }}>가짜돌파 방지 (1일 대기)</span>
-                            <Toggle checked={form.confirm_cross} onChange={v => setField('confirm_cross', v)} />
-                        </div>
                         <Field label="스탑로스 임계값 (%)">
                             <input type="number" value={form.stoploss_pct} onChange={e => setField('stoploss_pct', +e.target.value)} min={1} max={20} step={0.5} style={inputStyle} />
                         </Field>
-                        <div style={{ background: 'rgba(88,166,255,.07)', border: '1px solid rgba(88,166,255,.2)', borderRadius: 6, padding: '7px 10px', fontSize: '.72rem', color: '#8b949e', lineHeight: 1.5 }}>
-                            <b style={{ color: '#58a6ff' }}>가짜돌파 방지</b>: 200일선 첫 진입 시 1일 확인 후 매수<br />
-                            <b style={{ color: '#58a6ff' }}>부정입학</b>: 갭상승으로 과열 진입 시 첫날도 매수
+                        <div style={{ background: 'rgba(88,166,255,.07)', border: '1px solid rgba(88,166,255,.2)', borderRadius: 6, padding: '7px 10px', fontSize: '.72rem', color: '#8b949e', lineHeight: 1.6 }}>
+                            <b style={{ color: '#00d4aa' }}>2구간 전략</b>: MA200 위/아래만으로 투자 구간 결정<br />
+                            <b style={{ color: '#58a6ff' }}>진입</b>: MA200 위에서 N일 연속 마감 시 전액 매수<br />
+                            <b style={{ color: '#ff6b6b' }}>절반 스탑로스</b>: 평단 -5% 시 50% 매도→SGOV, 나머지 대기<br />
+                            <b style={{ color: '#ff6b6b' }}>이탈</b>: MA200 아래 마감 시 전량 매도→SGOV
                         </div>
                     </div>
 
@@ -587,22 +591,15 @@ export default function HomePage() {
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
                                     <Field label="익절 기준 (%)"><input type="number" value={form.profit_start} onChange={e => setField('profit_start', +e.target.value)} min={10} step={10} style={inputStyle} /></Field>
                                     <Field label="익절 간격 (%)"><input type="number" value={form.profit_spacing} onChange={e => setField('profit_spacing', +e.target.value)} min={10} step={10} style={inputStyle} /></Field>
+                                    <Field label="익절 시 매도 (%)"><input type="number" value={form.profit_ratio} onChange={e => setField('profit_ratio', +e.target.value)} min={10} max={100} step={5} style={inputStyle} /></Field>
+                                    <Field label="익절금 → SPYM 비율 (%)">
+                                        <input type="number" value={form.profit_to_spym} onChange={e => setField('profit_to_spym', Math.min(100, Math.max(0, +e.target.value)))} min={0} max={100} step={10} style={inputStyle} />
+                                    </Field>
                                 </div>
-                                <Field label="익절 시 매도 (%)">
-                                    <input type="number" value={form.profit_ratio} onChange={e => setField('profit_ratio', +e.target.value)} min={10} max={100} step={5} style={inputStyle} />
-                                </Field>
-                                <hr style={{ border: 'none', borderTop: '1px solid #30363d', margin: '8px 0' }} />
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                                    <span style={{ fontSize: '.8rem' }}>
-                                        🎯 {form.profit_start + form.profit_spacing}%에서 전량 익절
-                                    </span>
-                                    <Toggle checked={form.profit_full_exit} onChange={v => setField('profit_full_exit', v)} />
+                                <div style={{ background: 'rgba(255,215,0,.07)', border: '1px solid rgba(255,215,0,.25)', borderRadius: 6, padding: '6px 10px', fontSize: '.72rem', color: '#ffd700', lineHeight: 1.5 }}>
+                                    익절 시 매도금의 <b>{form.profit_to_spym}%</b>는 SPYM, <b>{100 - form.profit_to_spym}%</b>는 SGOV로 분배<br />
+                                    기준: <b>+{form.profit_start}%</b>부터 <b>{form.profit_spacing}%</b> 간격으로 익절
                                 </div>
-                                {form.profit_full_exit && (
-                                    <div style={{ background: 'rgba(255,215,0,.07)', border: '1px solid rgba(255,215,0,.25)', borderRadius: 6, padding: '6px 10px', fontSize: '.72rem', color: '#ffd700', lineHeight: 1.5 }}>
-                                        <b>{form.profit_start}%</b> 익절 후 남은 물량을 <b>{form.profit_start + form.profit_spacing}%</b>에서 전량 매도합니다.
-                                    </div>
-                                )}
                             </>
                         )}
                     </div>
@@ -625,12 +622,12 @@ export default function HomePage() {
                     {!compareMode && result && (
                         <>
                             <div style={{
-                                background: result.result.current_condition === '집중투자' ? 'rgba(77,255,136,.08)' : result.result.current_condition === '과열' ? 'rgba(255,215,0,.08)' : 'rgba(255,107,107,.08)',
-                                border: `1px solid ${result.result.current_condition === '집중투자' ? 'rgba(77,255,136,.3)' : result.result.current_condition === '과열' ? 'rgba(255,215,0,.3)' : 'rgba(255,107,107,.3)'}`,
+                                background: result.result.current_condition === 'INVEST' ? 'rgba(77,255,136,.08)' : 'rgba(255,107,107,.08)',
+                                border: `1px solid ${result.result.current_condition === 'INVEST' ? 'rgba(77,255,136,.3)' : 'rgba(255,107,107,.3)'}`,
                                 borderRadius: 8, padding: '14px 18px', marginBottom: 15
                             }}>
                                 <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#e6edf3', display: 'flex', alignItems: 'center', gap: 10 }}>
-                                    📢 현재 시장은 {condTag(result.result.current_condition)} 구간입니다!
+                                    📢 현재 시장은 {condTag(result.result.current_condition)} 상태입니다!
                                 </div>
                                 <div style={{ fontSize: '.8rem', color: '#8b949e', marginTop: 8 }}>
                                     ※ 최종 거래일({result.data_period?.split(' ~ ')[1] || form.end_date}) 기준 <b>{result.ma_period}일선</b> 분석 결과

@@ -1,22 +1,19 @@
 /**
- * 투자 전략 로직 - 시장 상황 판단 (3구간)
- * strategy.py → JS 포팅
+ * 투자 전략 로직 - 시장 상황 판단 (2구간)
+ * aratqqq2 전략 기반 — MA200 위/아래의 단순 2구간
  */
 
 export const MarketCondition = {
-    DECLINE: '하락',
-    INVEST: '집중투자',
-    OVERHEAT: '과열',
+    SAFE: 'SAFE',       // MA200 아래 → 안전자산(SGOV) 대기
+    INVEST: 'INVEST',   // MA200 위 → TQQQ 투자
 };
 
 /**
- * 레버리지 ETF 종가와 200일선을 비교하여 시장 구간 반환
+ * 레버리지 ETF 종가와 200일선을 비교하여 구간 반환 (2구간)
  */
 export function determineMarketCondition(price, ma200) {
-    if (ma200 <= 0) return MarketCondition.DECLINE;
-    if (price < ma200) return MarketCondition.DECLINE;
-    if (price < ma200 * 1.05) return MarketCondition.INVEST;
-    return MarketCondition.OVERHEAT;
+    if (ma200 <= 0 || price < ma200) return MarketCondition.SAFE;
+    return MarketCondition.INVEST;
 }
 
 /**

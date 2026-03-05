@@ -1,36 +1,62 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 200일선 TQQQ 투자법 — ARA Backtester
 
-## Getting Started
+**200일 이동평균선 기반 2구간 레버리지 ETF 투자 전략 백테스터**
 
-First, run the development server:
+## 📈 투자 전략 (2구간 로직)
+
+### 1. 진입 (ENTRY)
+- **조건**: MA200 위에서 **N일 연속** 마감 (기본: 2일)
+- **방법**: 안전자산(SGOV) 전액 → TQQQ(레버리지 ETF)
+
+### 2. 이탈 (EXIT)
+- **조건**: MA200 **아래**로 종가 마감
+- **방법**: 전량 매도 → SGOV 전환
+
+### 3. 절반 스탑로스 (STOP-LOSS)
+- **기준**: 평균 매수가 대비 **-5%** 하락 시
+- **방법**: 보유량의 **50% 즉시 매도 → SGOV**
+  - 당일 종가 MA200 위: 매도금 재매수
+  - 당일 종가 MA200 아래: 전량 매도 → SGOV
+
+### 4. 익절 (PROFIT-TAKING)
+- **기준**: +100%, +200%, +300%... 달성 시
+- **방법**: 보유량의 50% 매도
+- **분배**: 매도금의 50% → SPYM, 50% → SGOV (비율 조정 가능)
+
+---
+
+## 🖥️ 웹 앱 실행
 
 ```bash
+cd aratqqq
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 📊 백테스트 성과 (수수료 0.25% 반영)
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+| 기간 | 총수익률 | CAGR | MDD |
+|:---|:---:|:---:|:---:|
+| **최근 1년** | +35.5% | 35.5% | -23.0% |
+| **최근 3년** | +195.8% | 43.5% | -33.4% |
+| **최근 5년** | +407.2% | 38.4% | -33.4% |
+| **최근 10년** | **+2,003%** | **35.6%** | **-41.9%** |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+> 초기자산 $10,000 기준, aratqqq2 시뮬레이션 결과
 
-## Learn More
+---
 
-To learn more about Next.js, take a look at the following resources:
+## 📁 구조
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+aratqqq/
+├── src/
+│   ├── app/
+│   │   ├── api/backtest/route.js  # 백테스트 API
+│   │   └── page.jsx               # 메인 UI
+│   └── lib/
+│       ├── backtester.js          # 2구간 백테스트 엔진
+│       ├── dataFetcher.js         # Yahoo Finance 데이터
+│       └── strategy.js            # 2구간 시장 판단 로직
+```

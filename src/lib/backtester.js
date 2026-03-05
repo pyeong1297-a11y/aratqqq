@@ -1,6 +1,6 @@
 /**
- * 백테스트 엔진 — ARA Backtester
- * backtester.py -> JS 포팅 (딥바잉 전략 제거, 전량익절 옵션 추가)
+ * 백테스트 엔진 — ARA Backtester (2구간 전략 기반)
+ * aratqqq2 로직 이식 — MA200 위/아래 2구간, 절반스탑로스, +100/200/300% 익절
  */
 
 import { MarketCondition, determineMarketCondition, checkStoploss } from './strategy.js';
@@ -13,7 +13,6 @@ class Portfolio {
         this.cash = initialCash;
         this.leverShares = 0;
         this.leverAvgPrice = 0;
-        this.lastMilestone = 0;
         this.spymShares = 0;
         this.spymAvgPrice = 0;
         this.sgovShares = 0;
@@ -35,6 +34,7 @@ class Portfolio {
     }
 
     buySpym(price, amount) {
+        if (amount <= 0 || price <= 0) return;
         const sh = this._buyShares(price, amount);
         if (sh <= 0) return;
         const totalCost = this.spymShares * this.spymAvgPrice + amount;
@@ -44,6 +44,7 @@ class Portfolio {
     }
 
     buySgov(price, amount) {
+        if (amount <= 0 || price <= 0) return;
         const sh = this._buyShares(price, amount);
         if (sh <= 0) return;
         const totalCost = this.sgovShares * this.sgovAvgPrice + amount;
@@ -63,7 +64,7 @@ class Portfolio {
         this.leverShares -= sellSh;
         this.cash += proceeds;
         if (this.leverShares <= 0.0001) {
-            this.leverShares = 0; this.leverAvgPrice = 0; this.lastMilestone = 0;
+            this.leverShares = 0; this.leverAvgPrice = 0;
         }
         return proceeds;
     }
@@ -87,8 +88,8 @@ class Portfolio {
     totalValue(leverPrice, spymPrice, sgovPrice) {
         return this.cash
             + this.leverShares * leverPrice
-            + this.spymShares * spymPrice
-            + this.sgovShares * sgovPrice;
+            + this.spymShares * (spymPrice || 0)
+            + this.sgovShares * (sgovPrice || 1);
     }
 
     statusStr(leverTicker, leverPrice, spymPrice) {
@@ -113,14 +114,16 @@ export class Backtester {
         leverTicker = 'TQQQ',
         initialCapital = 10000,
         monthlyContribution = 0,
+        // 익절 설정
         profitTaking = true,
-        profitStart = 100,
-        profitRatio = 0.5,
-        profitSpacing = 100,
-        profitFullExit = false,  // true 시: 2번째 마일스톤(default 200%)에서 남은 물량 전량 매도
-        stoplostPct = 0.05,
-        confirmCross = true,
-        sellSpymOnInvest = false,
+        profitStart = 100,           // 첫 익절 기준 (%)
+        profitRatio = 0.5,           // 익절 시 매도 비율 (0.5 = 50%)
+        profitSpacing = 100,         // 익절 간격 (%)  → 100,200,300...
+        profitToSpym = 0.5,          // 익절금 중 SPYM 비율 (나머지는 SGOV)
+        // 스탑로스 설정
+        stoplostPct = 0.05,          // 스탑로스 임계값 (-5%)
+        // 진입 확인
+        consUpRequired = 2,          // MA200 위 연속 일수 (기본 2일)
     }) {
         this.data = data;
         this.leverTicker = leverTicker;
@@ -130,23 +133,32 @@ export class Backtester {
         this.profitStart = profitStart;
         this.profitRatio = profitRatio;
         this.profitSpacing = profitSpacing > 0 ? profitSpacing : 100;
-        this.profitFullExit = profitFullExit;
-        this.profitFullExitAt = profitStart + profitSpacing; // 기본: 100+100 = 200%
+        this.profitToSpym = profitToSpym;
         this.stoplostPct = stoplostPct;
-        this.confirmCross = confirmCross;
-        this.sellSpymOnInvest = sellSpymOnInvest;
+        this.consUpRequired = consUpRequired >= 1 ? consUpRequired : 2;
+
+        // 익절 마일스톤 배열 생성 (profitStart~800%, profitSpacing 간격)
+        this._profitMilestones = [];
+        for (let lv = profitStart; lv <= 800; lv += this.profitSpacing) {
+            this._profitMilestones.push(lv);
+        }
     }
 
     run() {
         const p = new Portfolio(this.initialCapital);
         const lt = this.leverTicker;
-        let prevCondition = null;
-        let waitingForConfirm = false;
+
+        let state = 'SAFE';    // 'SAFE' | 'INVESTED'
+        let entryPrice = 0;
+        let consUp = 0;
+        let profitTaken = new Set();
         let lastContribMonth = null;
         let totalContributed = this.initialCapital;
         let sgovBuyCost = 0;
         let sgovBuyDate = null;
-        let gapEntrySlRef = 0;
+
+        // 절반 스탑로스 상태
+        let halfSLActive = false;
 
         const portfolioValues = [];
         const trades = [];
@@ -159,6 +171,8 @@ export class Backtester {
             const ma200 = row.ma200 || 0;
             const date = row.date;
             const dateStr = row.dateStr;
+
+            if (leverPrice <= 0) continue;
 
             // 월별 적립
             const yearMonth = `${date.getFullYear()}-${date.getMonth()}`;
@@ -174,193 +188,171 @@ export class Backtester {
                 }
             }
 
-            // 시장 상황
+            // 2구간 시장 판단
             const condition = determineMarketCondition(leverPrice, ma200);
 
-            const openP = row.leverOpen || leverPrice;
-            const highP = row.leverHigh || Math.max(leverPrice, openP);
-
-            // 가짜돌파 방지 및 부정입학 판단
-            let sneakEntry = false;
-            let justConfirmed = false;
-
-            if (this.confirmCross) {
-                if (prevCondition === MarketCondition.DECLINE && (condition === MarketCondition.INVEST || condition === MarketCondition.OVERHEAT)) {
-                    // 하락장에서 투자/과열장으로 진입
-                    if (condition === MarketCondition.OVERHEAT) {
-                        // 종가가 과열로 마무리되면 무조건 부정입학
-                        waitingForConfirm = false;
-                        sneakEntry = true;
-                    } else if (condition === MarketCondition.INVEST && highP > ma200 * 1.05) {
-                        // 종가는 집중투자 구간이지만 장중 고가가 과열(ma200 * 1.05)을 터치한 경우 가짜신호로 보지 않고 즉시 진입
-                        waitingForConfirm = false;
-                        justConfirmed = true;
-                    } else {
-                        // 일반적인 장중 돌파 -> 가짜돌파 1일 대기
-                        waitingForConfirm = true;
-                    }
-                } else if (waitingForConfirm) {
-                    if (condition === MarketCondition.INVEST || condition === MarketCondition.OVERHEAT) {
-                        // 대기 후 확인됨 -> 진입
-                        waitingForConfirm = false;
-                        justConfirmed = true;
-                    } else {
-                        waitingForConfirm = false;
-                    }
-                } else if (prevCondition === MarketCondition.INVEST && condition === MarketCondition.OVERHEAT) {
-                    if (openP > ma200 * 1.05) {
-                        sneakEntry = true;
-                    }
-                } else if (condition !== MarketCondition.INVEST && condition !== MarketCondition.OVERHEAT) {
-                    waitingForConfirm = false;
-                }
-            } else {
-                waitingForConfirm = false;
-                sneakEntry = (
-                    (prevCondition === MarketCondition.DECLINE || prevCondition === MarketCondition.INVEST)
-                    && condition === MarketCondition.OVERHEAT
-                );
-            }
-
-            // 스탑로스 체크
+            // 스탑로스 체크 (INVESTED 중, halfSLActive가 아닐 때)
             let stoplossTriggered = false;
             let stoplossExecPrice = leverPrice;
-            if (p.leverShares > 0 && p.leverAvgPrice > 0) {
+            if (state === 'INVESTED' && !halfSLActive && p.leverShares > 0 && p.leverAvgPrice > 0) {
                 const lowP = row.leverLow || leverPrice;
-                const slRef = gapEntrySlRef > 0 ? gapEntrySlRef : p.leverAvgPrice;
-                const sl = checkStoploss(openP, lowP, leverPrice, slRef, this.stoplostPct);
+                const sl = checkStoploss(
+                    row.leverOpen || leverPrice,
+                    lowP,
+                    leverPrice,
+                    p.leverAvgPrice,
+                    this.stoplostPct
+                );
                 stoplossTriggered = sl.triggered;
                 stoplossExecPrice = sl.execPrice;
             }
 
             let tradeAction = null;
 
-            // A) 스탑로스
+            // ══ A) 스탑로스 ══
             if (stoplossTriggered) {
-                let gainInfo = '';
-                if (p.leverAvgPrice > 0) {
-                    const r = (stoplossExecPrice - p.leverAvgPrice) / p.leverAvgPrice * 100;
-                    gainInfo = ` [평단$${p.leverAvgPrice.toFixed(2)}->$${stoplossExecPrice.toFixed(2)}, ${r >= 0 ? '+' : ''}${r.toFixed(1)}%]`;
-                }
-                const spymInfo = this._spymInfo(p, spymPrice);
-                p.sellLever(stoplossExecPrice);
+                const gainInfo = this._leverInfo(p, lt, stoplossExecPrice);
+                // 절반 스탑로스: 50% 매도 → SGOV, 나머지 50% 유지
                 p.sellSpym(spymPrice);
-                const buyAmount = p.cash;
+                p.sellLever(stoplossExecPrice, 0.5);
+                const buyAmt = p.cash;
                 p.buySgov(sgovPrice, p.cash);
                 sgovBuyCost = p.sgovShares * sgovPrice;
                 sgovBuyDate = date;
-                gapEntrySlRef = 0;
-                waitingForConfirm = false;
-                tradeAction = `🛑 스탑로스(-${(this.stoplostPct * 100).toFixed(0)}%): 전량매도 -> SGOV $${buyAmount.toFixed(0)}${gainInfo}${spymInfo}`;
+                halfSLActive = true;
+                tradeAction = `⚡ 절반스탑로스(-${(this.stoplostPct * 100).toFixed(0)}%): 50%매도→SGOV $${buyAmt.toFixed(0)}, 나머지50% 대기${gainInfo}`;
             }
 
-            // B) 하락 (DECLINE)
-            else if (condition === MarketCondition.DECLINE) {
-                if (p.leverShares > 0 || p.spymShares > 0) {
+            // ══ B) SAFE 구간 (MA200 아래) ══
+            else if (condition === MarketCondition.SAFE) {
+                if (state === 'INVESTED' || halfSLActive) {
+                    // 하락 → 전량 매도 → SGOV
                     const gainInfo = this._leverInfo(p, lt, leverPrice);
                     const spymInfo = this._spymInfo(p, spymPrice);
                     p.sellLever(leverPrice);
                     p.sellSpym(spymPrice);
+                    p.sellSgov(sgovPrice);
                     p.buySgov(sgovPrice, p.cash);
                     sgovBuyCost = p.sgovShares * sgovPrice;
                     sgovBuyDate = date;
-                    gapEntrySlRef = 0;
-                    tradeAction = `📉 하락신호: 전량매도 -> SGOV $${(p.sgovShares * sgovPrice).toFixed(0)}${gainInfo}${spymInfo}`;
-                } else if (p.cash > 0) {
-                    p.buySgov(sgovPrice, p.cash);
-                    if (i === 0) {
-                        sgovBuyCost = p.sgovShares * sgovPrice;
-                        sgovBuyDate = date;
-                        tradeAction = `초기투자: SGOV $${(p.sgovShares * sgovPrice).toFixed(0)}`;
-                    } else if (monthlyToday) {
-                        sgovBuyCost += this.monthlyContribution;
-                        tradeAction = `[월적립] $${this.monthlyContribution.toFixed(0)} -> SGOV`;
+                    halfSLActive = false;
+                    entryPrice = 0;
+                    consUp = 0;
+                    profitTaken.clear();
+                    state = 'SAFE';
+                    tradeAction = `📉 하락(MA200 이탈): 전량→SGOV $${(p.sgovShares * sgovPrice).toFixed(0)}${gainInfo}${spymInfo}`;
+                } else {
+                    // SAFE → 현금을 SGOV로
+                    if (p.cash > 0) {
+                        p.buySgov(sgovPrice, p.cash);
+                        sgovBuyCost += this.monthlyContribution > 0 && monthlyToday ? this.monthlyContribution : (i === 0 ? this.initialCapital : 0);
+                        if (i === 0) {
+                            sgovBuyCost = p.sgovShares * sgovPrice;
+                            sgovBuyDate = date;
+                            tradeAction = `초기투자: SGOV $${(p.sgovShares * sgovPrice).toFixed(0)}`;
+                        } else if (monthlyToday) {
+                            sgovBuyCost += this.monthlyContribution;
+                            tradeAction = `[월적립] $${this.monthlyContribution.toFixed(0)} → SGOV`;
+                        }
                     }
+                    consUp = 0;
                 }
             }
 
-            // C) 집중투자 (INVEST)
+            // ══ C) INVEST 구간 (MA200 위) ══
             else if (condition === MarketCondition.INVEST) {
-                const profitResult = this._checkProfitTaking(p, leverPrice, spymPrice);
-                if (profitResult) tradeAction = profitResult;
-
-                if (p.sgovShares > 0) {
-                    const sgovInfo = this._sgovInterestInfo(p, sgovPrice, sgovBuyCost, sgovBuyDate, date);
-                    if (waitingForConfirm) {
-                        tradeAction = tradeAction || `⏳ 200일선 가짜돌파 확인중 (1일 대기)`;
-                    } else if (justConfirmed) {
-                        p.sellSgov(sgovPrice);
-                        p.buyLever(leverPrice, p.cash);
-                        sgovBuyCost = 0; sgovBuyDate = null;
-                        tradeAction = `📈 집중투자(돌파확인): SGOV -> ${lt} $${(p.leverShares * leverPrice).toFixed(0)} (체결가$${leverPrice.toFixed(2)})${sgovInfo}`;
-                    } else {
-                        p.sellSgov(sgovPrice);
-                        p.buyLever(leverPrice, p.cash);
-                        sgovBuyCost = 0; sgovBuyDate = null;
-                        tradeAction = `📈 집중투자: SGOV -> ${lt} $${(p.leverShares * leverPrice).toFixed(0)} (체결가$${leverPrice.toFixed(2)})${sgovInfo}`;
+                if (state === 'SAFE') {
+                    // 현금이 있으면 SGOV에 추가
+                    if (p.cash > 0) {
+                        p.buySgov(sgovPrice, p.cash);
+                        if (monthlyToday) {
+                            sgovBuyCost += this.monthlyContribution;
+                            tradeAction = `[월적립] $${this.monthlyContribution.toFixed(0)} → SGOV (진입 대기중)`;
+                        }
                     }
-                } else if (p.cash > 0 && !waitingForConfirm) {
-                    p.buyLever(leverPrice, p.cash);
-                    if (monthlyToday) {
-                        tradeAction = `[월적립] $${this.monthlyContribution.toFixed(0)} -> ${lt} (체결가$${leverPrice.toFixed(2)})`;
-                    }
-                }
-            }
-
-            // D) 과열 (OVERHEAT)
-            else if (condition === MarketCondition.OVERHEAT) {
-                const profitResult = this._checkProfitTaking(p, leverPrice, spymPrice);
-                if (profitResult) tradeAction = profitResult;
-
-                if (p.sgovShares > 0) {
-                    const sgovInfo = this._sgovInterestInfo(p, sgovPrice, sgovBuyCost, sgovBuyDate, date);
-                    if (waitingForConfirm) {
-                        tradeAction = tradeAction || `⏳ 200일선 가짜돌파 확인중 (1일 대기)`;
-                    } else if (justConfirmed) {
+                    // 연속 상승 카운트
+                    consUp++;
+                    if (consUp >= this.consUpRequired && p.sgovShares > 0) {
+                        // 진입!
+                        const sgovInfo = this._sgovInterestInfo(p, sgovPrice, sgovBuyCost, sgovBuyDate, date);
                         p.sellSgov(sgovPrice);
                         p.buyLever(leverPrice, p.cash);
+                        entryPrice = p.leverAvgPrice;
                         sgovBuyCost = 0; sgovBuyDate = null;
-                        const msg = `📈 과열구간 돌파매수: SGOV -> ${lt} $${(p.leverShares * leverPrice).toFixed(0)} (체결가$${leverPrice.toFixed(2)})${sgovInfo}`;
-                        tradeAction = tradeAction ? `${tradeAction} + ${msg}` : msg;
-                    } else if (sneakEntry) {
+                        state = 'INVESTED';
+                        profitTaken.clear();
+                        tradeAction = `🚀 진입(${this.consUpRequired}일 연속 MA위): SGOV → ${lt} $${(p.leverShares * leverPrice).toFixed(0)} (체결가$${leverPrice.toFixed(2)})${sgovInfo}`;
+                    }
+                } else if (state === 'INVESTED') {
+                    // halfSL 해제 처리: MA200 위로 확인 → 재매수
+                    if (halfSLActive) {
+                        // 절반 스탑로스 후 MA200 위 → 기존 lever 유지하고 SGOV 매도 후 재매수
+                        const sgovInfo = this._sgovInterestInfo(p, sgovPrice, sgovBuyCost, sgovBuyDate, date);
                         p.sellSgov(sgovPrice);
                         p.buyLever(leverPrice, p.cash);
+                        halfSLActive = false;
                         sgovBuyCost = 0; sgovBuyDate = null;
-                        gapEntrySlRef = ma200 * 1.01;
-                        const msg = `🚀 부정입학(갭상승): SGOV -> ${lt} $${(p.leverShares * leverPrice).toFixed(0)} (체결가$${leverPrice.toFixed(2)})${sgovInfo}`;
-                        tradeAction = tradeAction ? `${tradeAction} + ${msg}` : msg;
-                    } else if (p.cash > 0) {
-                        p.buySpym(spymPrice, p.cash);
-                        if (monthlyToday) tradeAction = `[월적립] $${this.monthlyContribution.toFixed(0)} -> SPYM(과열)`;
+                        tradeAction = `🔄 절반SL 후 재매수: SGOV→${lt} $${(p.leverShares * leverPrice).toFixed(0)}${sgovInfo}`;
                     }
-                } else if (p.cash > 0) {
-                    p.buySpym(spymPrice, p.cash);
-                    if (monthlyToday) {
-                        tradeAction = tradeAction ? `${tradeAction} + [월적립] SPYM` : `[월적립] $${this.monthlyContribution.toFixed(0)} -> SPYM(과열)`;
-                    } else if (i === 0) {
-                        tradeAction = `초기투자(과열): SPYM $${(p.spymShares * spymPrice).toFixed(0)}`;
+
+                    // 익절 체크
+                    const profitResult = this._checkProfitTaking(p, leverPrice, spymPrice, sgovPrice);
+                    if (profitResult) tradeAction = tradeAction ? `${tradeAction} + ${profitResult}` : profitResult;
+
+                    // 월 적립금 → lever 추가 매수
+                    if (monthlyToday && p.cash > 0) {
+                        p.buyLever(leverPrice, p.cash);
+                        tradeAction = tradeAction || `[월적립] $${this.monthlyContribution.toFixed(0)} → ${lt}`;
                     }
                 }
             }
 
             // 포트폴리오 가치 기록
             const tv = p.totalValue(leverPrice, spymPrice, sgovPrice);
-            portfolioValues.push({ date, dateStr, totalValue: tv, leverValue: p.leverShares * leverPrice, spymValue: p.spymShares * spymPrice, sgovValue: p.sgovShares * sgovPrice, cash: p.cash, condition, leverPrice, ma200 });
+            portfolioValues.push({
+                date, dateStr,
+                totalValue: tv,
+                leverValue: p.leverShares * leverPrice,
+                spymValue: p.spymShares * (spymPrice || 0),
+                sgovValue: p.sgovShares * sgovPrice,
+                cash: p.cash,
+                condition,
+                leverPrice,
+                ma200
+            });
 
             if (tradeAction) {
                 const gain = tv - totalContributed;
                 const gainPct = totalContributed > 0 ? gain / totalContributed * 100 : 0;
-                trades.push({ date, dateStr, action: tradeAction, condition, totalValue: tv, totalContributed, gain, gainPct, portfolioStatus: p.statusStr(lt, leverPrice, spymPrice) });
+                trades.push({
+                    date, dateStr,
+                    action: tradeAction,
+                    condition,
+                    totalValue: tv,
+                    totalContributed,
+                    gain,
+                    gainPct,
+                    portfolioStatus: p.statusStr(lt, leverPrice, spymPrice)
+                });
             }
-
-            prevCondition = condition;
         }
 
         if (portfolioValues.length === 0) return null;
+
+        // 종료 레코드
         const lastPV = portfolioValues[portfolioValues.length - 1];
         if (!trades.length || trades[trades.length - 1].dateStr !== lastPV.dateStr) {
             const gain = lastPV.totalValue - totalContributed;
-            trades.push({ date: lastPV.date, dateStr: lastPV.dateStr, action: '백테스트 종료 (최종)', condition: lastPV.condition, totalValue: lastPV.totalValue, totalContributed, gain, gainPct: totalContributed > 0 ? gain / totalContributed * 100 : 0, portfolioStatus: '' });
+            trades.push({
+                date: lastPV.date, dateStr: lastPV.dateStr,
+                action: '백테스트 종료 (최종)',
+                condition: lastPV.condition,
+                totalValue: lastPV.totalValue,
+                totalContributed,
+                gain,
+                gainPct: totalContributed > 0 ? gain / totalContributed * 100 : 0,
+                portfolioStatus: ''
+            });
         }
 
         const values = portfolioValues.map(v => v.totalValue);
@@ -387,34 +379,38 @@ export class Backtester {
     }
 
     // --- 헬퍼 -------------------------------------------------------------------
-    _checkProfitTaking(p, leverPrice, spymPrice) {
+    _checkProfitTaking(p, leverPrice, spymPrice, sgovPrice) {
         if (!this.profitTaking || p.leverShares <= 0 || p.leverAvgPrice <= 0) return null;
         const profitRate = (leverPrice - p.leverAvgPrice) / p.leverAvgPrice * 100;
         if (profitRate < this.profitStart) return null;
 
         const milestone = Math.floor((profitRate - this.profitStart) / this.profitSpacing) * this.profitSpacing + this.profitStart;
-        if (milestone < this.profitStart || milestone <= p.lastMilestone) return null;
+        if (milestone < this.profitStart) return null;
 
-        // 전량익절 조건: profitFullExit ON이고 2번째 이상 마일스톤(default 200%)
-        const isFullExit = this.profitFullExit && milestone >= this.profitFullExitAt;
-        const ratio = isFullExit ? 1.0 : this.profitRatio;
+        // 이미 해당 마일스톤 익절했으면 스킵
+        if (this._profitMilestones.indexOf(milestone) < 0) return null;
+        const milestoneKey = milestone;
+        if (p._lastMilestone >= milestoneKey) return null;
+        p._lastMilestone = milestoneKey;
 
-        const sellShares = p.leverShares * ratio;
-        const sellValue = sellShares * leverPrice;
-        p.sellLever(leverPrice, ratio);
-        p.buySpym(spymPrice, p.cash > 0 ? Math.min(p.cash, sellValue * (1 - FEE_RATE)) : sellValue * (1 - FEE_RATE));
-        p.lastMilestone = milestone;
+        // 절반 매도
+        const sellRatio = this.profitRatio;
+        const proceeds = p.sellLever(leverPrice, sellRatio);
 
-        if (isFullExit) {
-            return `🎯 전량익절+${milestone.toFixed(0)}%: ${this.leverTicker} ${sellShares.toFixed(2)}주 전량매도($${sellValue.toFixed(0)}) -> SPYM`;
-        }
-        return `💰 익절+${milestone.toFixed(0)}%: ${this.leverTicker} ${sellShares.toFixed(2)}주 매도($${sellValue.toFixed(0)}) -> SPYM`;
+        // 매도금의 SPYM 비율 + SGOV 비율로 분배
+        const toSpym = proceeds * this.profitToSpym;
+        const toSgov = proceeds * (1 - this.profitToSpym);
+
+        if (spymPrice > 0) p.buySpym(spymPrice, toSpym);
+        p.buySgov(sgovPrice, toSgov);
+
+        return `💰 익절+${milestone.toFixed(0)}%: ${this.leverTicker} ${(sellRatio * 100).toFixed(0)}%매도 → SPYM ${(this.profitToSpym * 100).toFixed(0)}%+SGOV ${((1 - this.profitToSpym) * 100).toFixed(0)}%`;
     }
 
     _leverInfo(p, ticker, price) {
         if (p.leverShares > 0.0001 && p.leverAvgPrice > 0) {
             const r = (price - p.leverAvgPrice) / p.leverAvgPrice * 100;
-            return ` [${ticker} 평단$${p.leverAvgPrice.toFixed(2)}->${r >= 0 ? '+' : ''}${r.toFixed(1)}%]`;
+            return ` [${ticker} 평단$${p.leverAvgPrice.toFixed(2)}→${r >= 0 ? '+' : ''}${r.toFixed(1)}%]`;
         }
         return '';
     }
